@@ -113,6 +113,11 @@ precision = 2
 show_missing = true
 skip_covered = false
 
+[tool.uv.workspace]
+members = [
+    "omnidaemon_supervisor_test_dir/omnicore_agent", "omnidaemon_supervisor_test_dir",
+]
+
 [dependency-groups]
 # Development dependencies
 dev = [

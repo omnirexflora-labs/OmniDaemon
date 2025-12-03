@@ -417,7 +417,9 @@ def bus_groups_cmd(
         pending_color = (
             "red"
             if group["pending"] > 50
-            else "yellow" if group["pending"] > 0 else "green"
+            else "yellow"
+            if group["pending"] > 0
+            else "green"
         )
         table.add_row(
             group["name"],
@@ -504,7 +506,9 @@ def bus_stats_cmd(
             pending_color = (
                 "red"
                 if group["pending"] > 50
-                else "yellow" if group["pending"] > 0 else "green"
+                else "yellow"
+                if group["pending"] > 0
+                else "green"
             )
             dlq_color = "red" if group["dlq"] > 0 else "dim"
 

@@ -1,0 +1,20 @@
+{
+  "name": "@omnidaemon/ts-callback-adapter",
+  "version": "0.1.0",
+  "description": "Stdio callback adapter for TypeScript/JavaScript agents managed by OmniDaemon.",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "typescript": "^5.4.5"
+  }
+}
+

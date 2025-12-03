@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, field_validator
-from typing import Any, Dict, Optional, Callable, List
+from typing import Any, Dict, Optional, Callable, List, Union, Tuple
 import uuid
 import time
 
@@ -13,12 +13,15 @@ class PayloadBase(BaseModel):
     routing/response information.
 
     Attributes:
-        content: The main content of the payload (required)
+        content: The main content of the payload (required). Can be str, dict, list, or tuple.
         webhook: Optional webhook URL for asynchronous callbacks when task completes
         reply_to: Optional topic name where the response should be published
     """
 
-    content: str = Field(..., description="The main content of the payload.")
+    content: Union[str, Dict[str, Any], List[Any], Tuple[Any, ...]] = Field(
+        ...,
+        description="The main content of the payload. Can be string, dict, list, or tuple.",
+    )
     webhook: Optional[str] = Field(
         None, description="Optional webhook URL for callbacks."
     )

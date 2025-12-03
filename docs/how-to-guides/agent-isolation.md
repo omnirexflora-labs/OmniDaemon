@@ -1,0 +1,209 @@
+# Agent Isolation & Dependency Management
+
+This document explains how OmniDaemon ensures complete isolation for agents written in Python, Go, and TypeScript, similar to how each agent runs in its own process.
+
+## Core Principles
+
+1. **Per-Agent Dependencies**: Each agent has its own dependency directory, isolated from other agents and the main process.
+2. **Runtime Installation**: Dependencies are installed at runtime when the supervisor starts, not at Docker build time.
+3. **Hash-Based Caching**: Dependencies are cached based on manifest file hashes, so unchanged agents don't reinstall.
+4. **No Global State**: Agents don't share dependency directories or build artifacts.
+
+## Python Agents
+
+### Isolation Strategy
+
+- **Dependency Directory**: `.omnidaemon_pydeps/` in each agent directory
+- **Installation**: `pip install --target .omnidaemon_pydeps -r requirements.txt`
+- **PYTHONPATH**: `[.omnidaemon_pydeps/, agent_dir/, existing_PYTHONPATH]`
+- **Caching**: Hash of `requirements.txt` or `pyproject.toml` determines if reinstall needed
+
+### Example Structure
+
+```
+examples/my_python_agent/
+├── callback.py              # Entry point
+├── agent_impl.py            # Agent logic
+├── requirements.txt         # Dependencies
+└── .omnidaemon_pydeps/      # Isolated dependencies (created at runtime)
+    ├── omnicoreagent/
+    ├── litellm/
+    └── ...
+```
+
+### How It Works
+
+1. Supervisor checks hash of `requirements.txt` or `pyproject.toml`
+2. If hash changed or `.omnidaemon_pydeps/` missing → install dependencies
+3. Build PYTHONPATH with dependencies first, then agent directory
+4. Launch Python callback adapter with PYTHONPATH in environment
+5. Agent process can import all dependencies via `sys.path`
+
+## Go Agents
+
+### Isolation Strategy
+
+- **Binary Cache**: `.omnidaemon_gocache/agent` in each agent directory
+- **Build Process**: `go build -o .omnidaemon_gocache/agent .` (builds entire package)
+- **Dependencies**: Go modules downloaded via `go mod tidy` (uses shared Go module cache, which is safe)
+- **Caching**: Hash of `go.mod`, `go.sum`, and all `.go` files determines if rebuild needed
+
+### Example Structure
+
+```
+examples/my_go_agent/
+├── callback.go              # Entry point (implements Callback interface)
+├── agent_impl.go            # Agent logic
+├── go.mod                   # Dependencies
+├── go.sum                   # Dependency checksums
+└── .omnidaemon_gocache/     # Build cache (created at runtime)
+    ├── agent                # Compiled binary
+    └── .hash                # Hash stamp file
+```
+
+### How It Works
+
+1. Supervisor checks hash of `go.mod`, `go.sum`, and all `.go` files
+2. If hash changed or binary missing → run `go mod tidy` and `go build`
+3. Build binary in `.omnidaemon_gocache/agent` within agent directory
+4. Launch binary directly (self-contained, no runtime dependencies needed)
+5. Binary is cached until source files or `go.mod` change
+
+### Note on Go Module Cache
+
+Go uses a shared module cache (`$GOPATH/pkg/mod` or `$GOMODCACHE`), but this is safe because:
+- Go modules are content-addressable (versioned by hash)
+- Different agents can safely share the same cache
+- Each agent's `go.mod` is independent
+
+For true isolation (if needed), you could set `GOMODCACHE` per agent, but it's not necessary.
+
+## TypeScript Agents
+
+### Isolation Strategy
+
+- **Dependency Directory**: `node_modules/` in each agent directory
+- **Installation**: `npm install` / `yarn install` / `pnpm install` (detected from lock files)
+- **Build Output**: `dist/` or `build/` in agent directory (TypeScript compilation)
+- **Caching**: Hash of `package.json` and lock files determines if reinstall needed
+
+### Example Structure
+
+```
+examples/my_ts_agent/
+├── src/
+│   └── callback.ts          # Entry point
+├── package.json             # Dependencies
+├── package-lock.json        # Dependency lock file
+├── tsconfig.json            # TypeScript config
+├── node_modules/            # Isolated dependencies (created at runtime)
+│   ├── @vercel/ai/
+│   └── ...
+└── dist/                    # Compiled JavaScript (created at runtime)
+    └── callback.js
+```
+
+### How It Works
+
+1. Supervisor detects package manager from lock files (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`)
+2. Checks hash of `package.json` and lock files
+3. If hash changed or `node_modules/` missing → run `npm install` / `yarn install` / `pnpm install`
+4. Build TypeScript: `npm run build` (if script exists) or `npx tsc`
+5. Launch TypeScript callback adapter with compiled JavaScript entry point
+6. Adapter loads module from agent's `node_modules/` (isolated)
+
+## Dockerfile Best Practices
+
+### ✅ What to Include
+
+- **Language Runtimes**: Python, Go, Node.js (toolchains only)
+- **Core Adapters**: Go callback adapter, TypeScript callback adapter (these are part of OmniDaemon infrastructure)
+- **System Dependencies**: Build tools, git (for versioning)
+
+### ❌ What NOT to Include
+
+- **Agent Dependencies**: Don't install `requirements.txt`, `go.mod`, or `package.json` for specific agents
+- **Agent Builds**: Don't build agent binaries or compile agent TypeScript at Docker build time
+- **Agent Code**: Agents are added at runtime, not baked into the image
+
+### Example Dockerfile
+
+```dockerfile
+# Install language runtimes (toolchains only)
+RUN apt-get install -y python3 python3-pip
+RUN curl -L https://go.dev/dl/go1.23.3.linux-amd64.tar.gz | tar -C /usr/local -xzf -
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt-get install -y nodejs
+
+# Build core adapters (infrastructure, not agents)
+WORKDIR /app/src/omnidaemon/agent_runner/go_callback_adapter
+RUN go mod download && go build -o /usr/local/bin/go_callback_adapter .
+
+WORKDIR /app/src/omnidaemon/agent_runner/ts_callback_adapter
+RUN npm install && npm run build
+
+# NOTE: Individual agents are NOT built here.
+# They are installed/built at runtime by the supervisor.
+```
+
+## Benefits of This Approach
+
+1. **True Isolation**: Each agent's dependencies are completely separate
+2. **No Conflicts**: Different agents can use different versions of the same library
+3. **Fast Startup**: Hash-based caching means unchanged agents don't reinstall
+4. **Flexible**: Agents can be added/removed without rebuilding Docker images
+5. **Language Agnostic**: Same isolation pattern works for Python, Go, TypeScript
+6. **Production Ready**: Each agent runs in its own process with its own dependencies
+
+## Comparison: Before vs After
+
+### ❌ Bad Practice (What We Removed)
+
+```dockerfile
+# Building specific agents at Docker build time
+WORKDIR /app/examples/my_go_agent
+RUN go mod download && go build -o /tmp/my_agent .
+
+WORKDIR /app/examples/my_python_agent
+RUN pip install -r requirements.txt
+```
+
+**Problems:**
+- Agents are baked into the image
+- Can't add/remove agents without rebuilding
+- All agents share the same dependency space
+- Docker image becomes huge
+
+### ✅ Good Practice (Current Approach)
+
+```python
+# Runtime installation per agent
+supervisor = await create_supervisor_from_directory(
+    agent_name="my_go_agent",
+    agent_dir="examples/my_go_agent",
+    callback_function="HandleRequest",
+)
+# Supervisor automatically:
+# 1. Detects language
+# 2. Installs dependencies in agent directory
+# 3. Builds/compiles if needed
+# 4. Launches isolated process
+```
+
+**Benefits:**
+- Agents are added at runtime
+- Each agent has isolated dependencies
+- Docker image stays small (only runtimes + adapters)
+- Fast startup with caching
+
+## Summary
+
+All three languages (Python, Go, TypeScript) now follow the same isolation pattern:
+
+1. **Dependencies installed in agent directory** (`.omnidaemon_pydeps/`, `node_modules/`, Go module cache)
+2. **Build artifacts in agent directory** (`.omnidaemon_gocache/agent`, `dist/`)
+3. **Hash-based caching** (only rebuild/reinstall if manifest files change)
+4. **Runtime installation** (not at Docker build time)
+5. **Complete isolation** (each agent is independent)
+
+This ensures that agents are truly isolated, can be added/removed dynamically, and don't interfere with each other.
+

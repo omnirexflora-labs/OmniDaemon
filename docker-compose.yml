@@ -1,0 +1,84 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: omnidaemon-redis
+    ports:
+      - "6378:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - omnidaemon-network
+
+  omnidaemon:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: omnidaemon-agent-runner
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # Override Redis URL for Docker network
+      - REDIS_URL=redis://redis:6379/0
+      
+      # Override storage directory for Docker
+      - JSON_STORAGE_DIR=/app/.omnidaemon_data
+      
+      # Go Environment (required for Go agent)
+      - PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      - GOPATH=/go
+      - GOROOT=/usr/local/go
+    volumes:
+      - .:/app
+      - omnidaemon_data:/app/.omnidaemon_data
+      - go_cache:/go/pkg/mod
+    ports:
+      - "8765:8765"
+    networks:
+      - omnidaemon-network
+    restart: unless-stopped
+    command: >
+      sh -c "
+        echo 'Waiting for Redis...' &&
+        sleep 2 &&
+        echo 'Starting OmniDaemon agent runner...' &&
+        python -m examples.omnicoreagent_dir.supervised_agent_runner
+      "
+
+  # Optional: Redis Commander for debugging
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: omnidaemon-redis-commander
+    depends_on:
+      - redis
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    ports:
+      - "8081:8081"
+    networks:
+      - omnidaemon-network
+    profiles:
+      - debug
+
+volumes:
+  redis_data:
+    driver: local
+  omnidaemon_data:
+    driver: local
+  go_cache:
+    driver: local
+
+networks:
+  omnidaemon-network:
+    driver: bridge
+
