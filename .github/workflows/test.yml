@@ -4,11 +4,11 @@ on:
   pull_request:
     branches:
       - main
-      - develop
+      - dev
   push:
     branches:
       - main
-      - develop
+      - dev
 
 jobs:
   check-test-files:
@@ -216,10 +216,6 @@ jobs:
       - name: Run ruff
         run: |
           uv run ruff check src/ tests/
-
-      - name: Run black check
-        run: |
-          uv run black --check src/ tests/
 
       - name: Run mypy
         run: |
