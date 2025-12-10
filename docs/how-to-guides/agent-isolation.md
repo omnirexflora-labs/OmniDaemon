@@ -1,6 +1,10 @@
-# Agent Isolation & Dependency Management
+# Agent Isolation
 
-This document explains how OmniDaemon ensures complete isolation for agents written in Python, Go, and TypeScript, similar to how each agent runs in its own process.
+> **How agents run in separate processes with independent dependencies**
+
+This document explains how OmniDaemon ensures complete isolation for Python agents. Each agent runs in its own process, similar to how each container runs in its own isolated environment.
+
+> **Note:** Multi-language support (Go, TypeScript) is planned but not yet implemented. This guide reflects the planned architecture.
 
 ## Core Principles
 

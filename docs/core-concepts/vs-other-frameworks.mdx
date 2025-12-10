@@ -6,7 +6,7 @@ description: "How OmniDaemon provides production infrastructure for LangGraph, C
 # Running AI Frameworks with OmniDaemon
 
 > **OmniDaemon is infrastructure, not a framework.**  
-> Think "Kafka for AI Agents" - we run your frameworks reliably in production.
+> Think "Kubernetes for AI Agents" - we provide the runtime for your frameworks.
 
 ## Understanding the Layers
 
@@ -100,7 +100,7 @@ Frameworks like LangGraph, CrewAI, and AutoGen are excellent at defining agent l
 │  ✅ Each framework in isolated process (like containers)        │
 │  ✅ Crash in one doesn't affect others (fault isolation)         │
 │  ✅ Supervisors auto-restart crashed agents                      │
-│  ✅ Multi-language support (Python, Go, TypeScript, etc.)        │
+│  ✅ Production-ready for Python agents                           │
 │  ✅ Event-driven (Redis/Kafka) for reliability                   │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -194,7 +194,7 @@ await sdk.register_agent(
 |-----------|-------------------|-----------------|
 | **LangGraph** | Requires LangGraph Cloud (paid) for multi-host | ✅ Multi-host via Redis/Kafka (open source) |
 | **CrewAI** | No built-in process isolation | ✅ Each crew in separate process |
-| **AutoGen** | gRPC only for AutoGen agents | ✅ Run ANY framework, multi-language |
+| **AutoGen** | Limited deployment options | ✅ Production-ready runtime with auto-recovery |
 | **Custom Python** | Manual retry/DLQ implementation | ✅ Built-in reliability patterns |
 
 ---
@@ -255,12 +255,12 @@ STORAGE_BACKEND=mongodb + MONGODB_URI=...           # Coming Q2 2025
 |--------|---------------------|------------|
 | **What it is** | Application layer | Infrastructure layer |
 | **Purpose** | Define agent logic | Run agents reliably |
-| **Examples** | LangGraph, CrewAI, AutoGen | Kafka, Kubernetes (for agents) |
+| **Examples** | LangGraph, CrewAI, AutoGen | Kubernetes (for containers) |
 | **You use it for** | Building workflows | Production scaling |
 | **Relationship** | **You keep using these** | **We run them for you** |
 
-> **"OmniDaemon = Kafka for AI Agents"**  
-> We're infrastructure that survives framework churn.
+> **"Kubernetes for AI Agents"**  
+> We provide the runtime infrastructure that handles process isolation and lifecycle management.
 
 **Next Steps**:
 - [Quick Start with Supervisors](../getting-started/quick-start.md)

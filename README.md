@@ -33,8 +33,8 @@ Frameworks like LangGraph, CrewAI, and AutoGen are great for *building* agent lo
 OmniDaemon runs **each agent in its own isolated process** (like containers), managed by a Supervisor.
 *   ✅ **Fault Isolation**: If Agent A crashes, Agent B keeps running.
 *   ✅ **Auto-Recovery**: Supervisors automatically restart crashed agents.
-*   ✅ **Multi-Language**: Run Python, Go, TypeScript agents side-by-side.
 *   ✅ **Resource Safety**: Clean memory/CPU boundaries per agent.
+*   ✅ **Production-Ready**: Run Python agents (LangGraph, CrewAI, AutoGen, custom) with process isolation.
 
 **Think of it like Kubernetes Pods:**  
 Each agent runs in its own "container" (process) but shares the underlying host resources (CPU, memory). One pod crash doesn't affect others, and the orchestrator (Supervisor) handles lifecycle management.
@@ -489,7 +489,7 @@ python agent_runner.py
 - ✅ Agent runs in **isolated process** (like a container)
 - ✅ Crashes in agent **won't kill** other agents
 - ✅ **Auto-restart** if the agent crashes
-- ✅ **Multi-language** support (Python, Go, TypeScript)
+- ✅ **Production-ready** for Python agents
 - ✅ Event-driven communication via Redis Streams
 
 ---
