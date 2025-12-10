@@ -46,7 +46,6 @@ class TestBaseEventBus:
     def test_concrete_implementation_required(self):
         """Verify concrete implementations must implement all methods."""
 
-        # Create a partial implementation
         class IncompleteEventBus(BaseEventBus):
             async def connect(self):
                 pass
@@ -57,13 +56,9 @@ class TestBaseEventBus:
             async def publish(self, event_payload):
                 pass
 
-            # Missing subscribe, unsubscribe, get_consumers
-
-        # Should raise TypeError when trying to instantiate
         with pytest.raises(TypeError):
             IncompleteEventBus()
 
-        # Complete implementation should work
         class CompleteEventBus(BaseEventBus):
             async def connect(self):
                 pass
@@ -85,7 +80,6 @@ class TestBaseEventBus:
             async def get_consumers(self):
                 return {}
 
-        # Complete implementation should be instantiable
         bus = CompleteEventBus()
         assert isinstance(bus, BaseEventBus)
         assert isinstance(bus, ABC)

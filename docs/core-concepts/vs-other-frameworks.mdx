@@ -1,0 +1,268 @@
+---
+title: "Running AI Frameworks with OmniDaemon"
+description: "How OmniDaemon provides production infrastructure for LangGraph, CrewAI, AutoGen, and any AI agent framework"
+---
+
+# Running AI Frameworks with OmniDaemon
+
+> **OmniDaemon is infrastructure, not a framework.**  
+> Think "Kafka for AI Agents" - we run your frameworks reliably in production.
+
+## Understanding the Layers
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    APPLICATION LAYER                            │
+│         (Agent Logic - What Your Agents Do)                     │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  📦 LangGraph     📦 CrewAI      📦 AutoGen                      │
+│  📦 Google ADK    📦 LangChain   📦 Custom Python               │
+│                                                                 │
+│  → These frameworks define WHAT your agents do                 │
+│  → Task delegation, reasoning, tool use, prompts               │
+└─────────────────────────────────────────────────────────────────┘
+                            ↓ runs on ↓
+┌─────────────────────────────────────────────────────────────────┐
+│                  INFRASTRUCTURE LAYER                           │
+│         (Runtime - How Your Agents Run)                         │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│                      🔧 OmniDaemon                               │
+│                                                                 │
+│  → Process isolation (each agent = separate process)           │
+│  → Auto-restart on crash                                        │
+│  → Event-driven communication (Redis/Kafka)                     │
+│  → DLQ, retries, monitoring built-in                            │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**The Analogy**: Kubernetes runs Docker containers. OmniDaemon runs AI agents.
+
+---
+
+## Why You Need Both
+
+| What | Framework (LangGraph/CrewAI) | Infrastructure (OmniDaemon) |
+|------|------------------------------|------------------------------|
+| **Purpose** | Define agent logic | Run agents reliably |
+| **Focus** | WHAT agents do | HOW agents run |
+| **Examples** | Task delegation, reasoning chains | Process isolation, auto-restart |
+| **You Use It For** | Building agent workflows | Scaling to production |
+
+> **You keep using your favorite framework. We handle the runtime.**
+
+---
+
+## The Problem Frameworks Don't Solve
+
+Frameworks like LangGraph, CrewAI, and AutoGen are excellent at defining agent logic, but they run as **single-process applications**:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│          TRADITIONAL SINGLE-PROCESS EXECUTION                   │
+│                                                                 │
+│  python my_langgraph_app.py  ← One process                      │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │  Agent 1  │  Agent 2  │  Agent 3  │  Agent 4  │  ...   │    │
+│  │  (thread) │  (thread) │  (thread) │  (thread) │        │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│                                                                 │
+│  ❌ One crash = EVERYTHING dies                                 │
+│  ❌ One memory leak = ENTIRE process affected                    │
+│  ❌ No fault isolation = Shared failure domain                   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**This is fine for development, but breaks in production.**
+
+---
+
+## The OmniDaemon Solution: Infrastructure Layer
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│              OMNIDAEMON PRODUCTION RUNTIME                      │
+│                                                                 │
+│  OmniDaemon Process (I/O orchestration, ~1% CPU)                │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │  Event Bus  │  Supervisors  │  Health Checks  │  DLQ   │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│         │              │              │              │          │
+│         ▼              ▼              ▼              ▼          │
+│  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────┐     │
+│  │LangGraph  │  │ CrewAI    │  │ AutoGen   │  │  Custom   │     │
+│  │Agent      │  │ Agent     │  │ Agent     │  │  Agent    │     │
+│  │(process)  │  │(process)  │  │(process)  │  │(process)  │     │
+│  │PID: 1234  │  │PID: 1235  │  │PID: 1236  │  │PID: 1237  │     │
+│  └───────────┘  └───────────┘  └───────────┘  └───────────┘     │
+│                                                                 │
+│  ✅ Each framework in isolated process (like containers)        │
+│  ✅ Crash in one doesn't affect others (fault isolation)         │
+│  ✅ Supervisors auto-restart crashed agents                      │
+│  ✅ Multi-language support (Python, Go, TypeScript, etc.)        │
+│  ✅ Event-driven (Redis/Kafka) for reliability                   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## How to Run Your Framework with OmniDaemon
+
+### Example 1: Running LangGraph with OmniDaemon
+
+**Your LangGraph code** (stays the same):
+```python
+# my_langgraph_agent/agent.py
+from langgraph.graph import StateGraph
+
+def my_langgraph_workflow(message: dict):
+    # Your LangGraph logic here
+    graph = StateGraph(...)
+    result = graph.invoke(message["content"])
+    return {"result": result}
+```
+
+**Run it with OmniDaemon**:
+```python
+# agent_runner.py
+from omnidaemon import OmniDaemonSDK, AgentConfig
+from omnidaemon.supervisor import create_supervisor_from_directory
+
+sdk = OmniDaemonSDK()
+
+# Create supervisor for your LangGraph agent
+supervisor = await create_supervisor_from_directory(
+    agent_name="langgraph_agent",
+    agent_dir="./my_langgraph_agent",
+    callback_function="agent.my_langgraph_workflow"
+)
+
+# Register with event-driven runtime
+await sdk.register_agent(
+    agent_config=AgentConfig(topic="tasks.langgraph"),
+    callback=supervisor.handle_event
+)
+
+await sdk.start()
+```
+
+**What you get**:
+- ✅ Your LangGraph agent runs in isolated process
+- ✅ Auto-restart if it crashes
+- ✅ Event-driven (publish tasks to `tasks.langgraph` topic)
+- ✅ DLQ for failed tasks
+- ✅ Built-in monitoring
+
+---
+
+### Example 2: Running CrewAI with OmniDaemon
+
+**Your CrewAI code** (stays the same):
+```python
+# my_crewai_agent/agent.py
+from crewai import Agent, Task, Crew
+
+def my_crewai_workflow(message: dict):
+    # Your CrewAI logic
+    agent = Agent(role="Researcher", ...)
+    task = Task(description=message["content"], ...)
+    crew = Crew(agents=[agent], tasks=[task])
+    result = crew.kickoff()
+    return {"result": result}
+```
+
+**Run it with OmniDaemon** (same pattern):
+```python
+supervisor = await create_supervisor_from_directory(
+    agent_name="crewai_agent",
+    agent_dir="./my_crewai_agent",
+    callback_function="agent.my_crewai_workflow"
+)
+
+await sdk.register_agent(
+    agent_config=AgentConfig(topic="tasks.crewai"),
+    callback=supervisor.handle_event
+)
+```
+
+---
+
+## Framework-Specific Benefits
+
+| Framework | Native Limitation | OmniDaemon Adds |
+|-----------|-------------------|-----------------|
+| **LangGraph** | Requires LangGraph Cloud (paid) for multi-host | ✅ Multi-host via Redis/Kafka (open source) |
+| **CrewAI** | No built-in process isolation | ✅ Each crew in separate process |
+| **AutoGen** | gRPC only for AutoGen agents | ✅ Run ANY framework, multi-language |
+| **Custom Python** | Manual retry/DLQ implementation | ✅ Built-in reliability patterns |
+
+---
+
+## What About the Agent2Agent (A2A) Protocol?
+
+> [!NOTE]
+> A2A and OmniDaemon solve **different problems**. They are **complementary**.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│              A2A PROTOCOL - Communication Standard              │
+├─────────────────────────────────────────────────────────────────┤
+│  "How do agents from DIFFERENT COMPANIES talk to each other?"  │
+│                                                                 │
+│  Agent A (Your Company) ←─ A2A ─→ Agent B (Salesforce)         │
+│                                                                 │
+│  ⚠️ Doesn't handle: crashes, retries, process management        │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│            OMNIDAEMON - Execution Infrastructure                │
+├─────────────────────────────────────────────────────────────────┤
+│  "How do I run MY agents reliably in production?"              │
+│                                                                 │
+│  ✅ Process isolation  ✅ Auto-restart  ✅ Event-driven          │
+│  ✅ DLQ  ✅ Monitoring  ✅ Multi-host scaling                     │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**You can use both**: Your OmniDaemon-managed agents can speak A2A to external systems.
+
+---
+
+## Pluggable Backends (No Vendor Lock-In)
+
+**The Simple Truth**: Change backends via environment variables, **zero code changes**.
+
+```bash
+# Event Bus - Swap anytime
+EVENT_BUS_TYPE=redis_stream + REDIS_URL=...         # Current (production-ready)
+EVENT_BUS_TYPE=kafka + KAFKA_SERVERS=...            # Coming Q1 2025
+EVENT_BUS_TYPE=rabbitmq + RABBITMQ_URL=...          # Coming Q2 2025
+
+# Storage - Swap anytime
+STORAGE_BACKEND=redis + REDIS_URL=...               # Current (production-ready)
+STORAGE_BACKEND=postgresql + POSTGRES_URL=...       # Coming Q1 2025
+STORAGE_BACKEND=mongodb + MONGODB_URI=...           # Coming Q2 2025
+```
+
+**Your agent code never changes. Just update env vars.**
+
+---
+
+## Summary: Infrastructure, Not Competition
+
+| Aspect | AI Agent Frameworks | OmniDaemon |
+|--------|---------------------|------------|
+| **What it is** | Application layer | Infrastructure layer |
+| **Purpose** | Define agent logic | Run agents reliably |
+| **Examples** | LangGraph, CrewAI, AutoGen | Kafka, Kubernetes (for agents) |
+| **You use it for** | Building workflows | Production scaling |
+| **Relationship** | **You keep using these** | **We run them for you** |
+
+> **"OmniDaemon = Kafka for AI Agents"**  
+> We're infrastructure that survives framework churn.
+
+**Next Steps**:
+- [Quick Start with Supervisors](../getting-started/quick-start.md)
+- [Agent Supervisor Architecture](../architecture/agent-supervisor.mdx)
+- [Multi-Host Scaling](../architecture/multi-host-scaling.mdx)

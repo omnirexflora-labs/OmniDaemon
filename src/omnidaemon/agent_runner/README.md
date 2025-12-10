@@ -1,428 +1,432 @@
-# Agent Runner Architecture
 
-This document explains how the OmniDaemon agent runner system works, including the supervisor pattern, callback adapters, and the complete event flow.
+The Agent Supervisor provides robust process management for OmniDaemon agents with comprehensive lifecycle management, health monitoring, and graceful error handling.
 
-## Overview
 
-The agent runner system enables **language-agnostic, process-isolated agent execution** within OmniDaemon's event-driven architecture. Agents run in separate processes, managed by supervisors, and communicate via stdio using a JSON protocol.
+✅ **State Management** - Structured state tracking (IDLE, STARTING, RUNNING, STOPPED, CRASHED, RESTARTING)  
+✅ **Graceful Shutdown** - 3-phase shutdown (stdin message → SIGTERM → SIGKILL)  
+✅ **Auto-Restart** - Circuit breaker with exponential backoff  
+✅ **Health Monitoring** - Heartbeat protocol with CPU/memory tracking  
+✅ **Storage Integration** - Metrics persistence with graceful degradation  
+✅ **Process Isolation** - Stdio-based communication for safety  
 
-## Architecture Components
 
-### 1. **BaseAgentRunner** (`runner.py`)
-The core event-driven runner that:
-- Subscribes to event bus topics
-- Routes events to registered agent callbacks
-- Tracks metrics and handles responses
-- Manages webhook delivery and reply-to topics
-
-### 2. **AgentSupervisor** (`agent_supervisor.py`)
-Manages the lifecycle of a single agent process:
-- **Launches** agent processes as subprocesses
-- **Communicates** via stdio (stdin/stdout) using JSON protocol
-- **Monitors** process health and automatically restarts on failure
-- **Handles** request/response correlation using unique IDs
-- **Manages** timeouts and error handling
-
-### 3. **Python Callback Adapter** (`python_callback_adapter.py`)
-A generic adapter that wraps any Python callback function:
-- Dynamically imports Python modules
-- Loads callback functions by name
-- Runs in a separate process
-- Communicates via stdio JSON protocol
-- Works with any existing Python callback without code modification
-
-### 3b. **TypeScript Callback Adapter** (`ts_callback_adapter`)
-For Node ecosystems (TypeScript or JavaScript):
-- Runs as a Node process that implements the same stdio JSON protocol
-- Dynamically loads your compiled JavaScript module (built from TypeScript or plain JS)
-- Invokes the exported callback you specify and streams responses back to the supervisor
-- Emits structured logs to stderr so they appear in the OmniDaemon logs
-
-> ℹ️ **Build requirement**: the adapter executes JavaScript files. Compile your `.ts` sources (e.g., `tsc` → `dist/index.js`) or configure `package.json` to point at an existing build artifact. The supervisor raises a clear error if it only finds `.ts` files.
-
-### 4. **Directory-Based Discovery** (`agent_supervisor.py`)
-Factory functions that automatically discover agents:
-- **Detects language** from directory structure (Python, Go, etc.)
-- **Finds callback functions** by searching through agent directories
-- **Converts paths** to importable module paths
-- **Creates supervisors** automatically
-
-## Complete Event Flow
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│ 1. Event Published to OmniDaemon Event Bus                     │
-│    Topic: "file_system.tasks"                                   │
-└────────────────────┬────────────────────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ 2. BaseAgentRunner receives event                              │
-│    - Enriches message with topic/agent metadata                 │
-│    - Tracks "task_received" metric                              │
-│    - Calls registered callback function                         │
-└────────────────────┬────────────────────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ 3. Callback Function (in agent runner)                         │
-│    async def call_file_system_agent(message):                   │
-│        supervisor = await create_supervisor_from_directory(...) │
-│        return await supervisor.handle_event(message)            │
-└────────────────────┬────────────────────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ 4. AgentSupervisor                                              │
-│    - Checks if agent process is running                         │
-│    - Creates JSON envelope with unique request ID               │
-│    - Writes to process stdin                                    │
-│    - Waits for response on stdout                               │
-└────────────────────┬────────────────────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ 5. Python Callback Adapter Process                             │
-│    - Reads JSON envelope from stdin                             │
-│    - Dynamically imports the agent module                       │
-│    - Calls the callback function with message payload           │
-│    - Writes response JSON to stdout                             │
-└────────────────────┬────────────────────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ 6. Agent Implementation (in separate process)                   │
-│    async def call_file_system_agent(message):                   │
-│        # Your agent code here                                   │
-│        result = await agent.run(message.get("content"))        │
-│        return {"status": "success", "data": result}             │
-└────────────────────┬────────────────────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ 7. Response flows back through the chain                        │
-│    Adapter → Supervisor → Callback → BaseAgentRunner           │
-└────────────────────┬────────────────────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ 8. BaseAgentRunner handles response                             │
-│    - Saves result to storage                                    │
-│    - Sends webhook (if configured)                             │
-│    - Publishes to reply_to topic (if configured)               │
-│    - Tracks "task_processed" metric                             │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-## Directory-Based Agent Discovery
-
-The system supports **directory-based agent discovery**, where you only need to specify:
-1. **Agent directory path** (e.g., `"agents/my_agent"`)
-2. **Callback function name** (e.g., `"handle_request"`)
-
-The system automatically:
-- Detects the language (Python, Go, etc.)
-- Searches the directory for the callback function
-- Converts file paths to importable module paths
-- Creates and starts the supervisor
-
-### Example Agent Directory Structure
-
-```
-agents/
-└── omnicore_agent/
-    ├── __init__.py
-    ├── utils.py              # Helper functions
-    ├── agent_impl.py         # Agent implementation class
-    └── callback.py           # Entry point callback function
-        └── call_file_system_agent()  # ← This is what you specify
-```
-
-### How Discovery Works
-
-1. **Language Detection**: Checks for `.py` files, `__init__.py`, or Go files
-2. **Module Path Conversion**: Converts `agents/omnicore_agent` → `agents.omnicore_agent`
-3. **Callback Search**: Recursively searches all `.py` files in the directory
-4. **Function Validation**: Imports each module and checks if the callback exists
-5. **Supervisor Creation**: Creates `AgentSupervisor` with the found module/function
-
-## Usage Examples
-
-### Basic Usage: Directory-Based Discovery (Lazy Initialization)
 
 ```python
-from omnidaemon import OmniDaemonSDK, AgentConfig
-from omnidaemon.agent_runner.agent_supervisor import (
-    create_supervisor_from_directory,
-    shutdown_all_supervisors,
-)
+async def handle_request(message: dict) -> dict:
+    """Your agent logic here."""
+    return {"result": "processed"}
+```
 
-sdk = OmniDaemonSDK()
 
-async def my_agent_callback(message: dict):
-    """Callback registered with OmniDaemon"""
-    # Create/get supervisor for this agent (lazy - on first event)
-    supervisor = await create_supervisor_from_directory(
-        agent_name="my_agent",
-        agent_dir="agents/my_agent",           # Directory path
-        callback_function="handle_request",    # Function name
-    )
-    # Forward event to supervised agent process
-    return await supervisor.handle_event(message)
+```python
+from omnidaemon.agent_runner.agent_supervisor_runner import create_supervisor_from_directory
 
-# Register with OmniDaemon
-await sdk.register_agent(
-    agent_config=AgentConfig(
-        topic="my.topic",
-        callback=my_agent_callback,
-    )
+supervisor = await create_supervisor_from_directory(
+    agent_name="my-agent",
+    agent_dir="agents/my_agent",
+    callback_function="handle_request"
 )
 ```
 
-**Note**: With lazy initialization, the first event will experience a delay as:
-- Supervisor is created
-- Agent process is started
-- Agent initializes
-
-### Recommended: Eager Initialization (Pre-start Agents)
-
-To avoid first-request delays, pre-initialize supervisors **before** registering with OmniDaemon:
 
 ```python
-from omnidaemon import OmniDaemonSDK, AgentConfig
-from omnidaemon.agent_runner.agent_supervisor import (
-    create_supervisor_from_directory,
-    shutdown_all_supervisors,
-)
-
-sdk = OmniDaemonSDK()
-
-# Pre-initialize supervisor (agent process starts immediately)
-_my_agent_supervisor = None
-
-async def _get_my_agent_supervisor():
-    global _my_agent_supervisor
-    if _my_agent_supervisor is None:
-        _my_agent_supervisor = await create_supervisor_from_directory(
-            agent_name="my_agent",
-            agent_dir="agents/my_agent",
-            callback_function="handle_request",
-        )
-    return _my_agent_supervisor
-
-async def my_agent_callback(message: dict):
-    """Callback registered with OmniDaemon"""
-    # Supervisor already exists - just get it
-    supervisor = await _get_my_agent_supervisor()
-    return await supervisor.handle_event(message)
-
-async def main():
-    # Pre-initialize BEFORE registering
-    logger.info("Pre-initializing agent supervisors...")
-    await _get_my_agent_supervisor()  # Process starts here
-    logger.info("Agent processes are running and ready")
-    
-    # Now register - agents are already running
-    await sdk.register_agent(
-        agent_config=AgentConfig(
-            topic="my.topic",
-            callback=my_agent_callback,
-        )
-    )
-    
-    await sdk.start()
-    # ... rest of your code
+response = await supervisor.handle_event({
+    "type": "data",
+    "payload": {"task": "process this"}
+})
 ```
 
-### Advanced Usage: Manual Supervisor Configuration
 
 ```python
-from omnidaemon.agent_runner.agent_supervisor import (
-    AgentSupervisor,
-    AgentProcessConfig,
-)
+from omnidaemon.agent_runner.types import AgentProcessConfig
 
-# Create supervisor with custom configuration
 config = AgentProcessConfig(
-    name="my_agent",
+    name="my-agent",
     command="python",
-    args=["-m", "omnidaemon.agent_runner.python_callback_adapter",
-          "--module", "my_module",
-          "--function", "my_callback"],
+    args=["-m", "omnidaemon.agent_runner.python_callback_adapter", ...],
+    
     request_timeout=60.0,
+    graceful_timeout_sec=5.0,
+    sigterm_timeout_sec=5.0,
+    
     restart_on_exit=True,
     max_restart_attempts=3,
+    restart_backoff_seconds=5.0,
+    
+    heartbeat_interval_seconds=30.0,
+    
+    env={"CUSTOM_VAR": "value"},
+    cwd="/path/to/agent"
+)
+```
+
+> [!CAUTION]
+> **`request_timeout` is critical for long-running agents!**
+>
+> The `request_timeout` (default: 60-120 seconds depending on how you create the supervisor) defines how long the supervisor waits for your agent to respond to a single request.
+>
+> **If your agent takes longer than this timeout:**
+> - The request will be marked as failed
+> - The pending future will be cancelled
+> - If using Redis Streams (event bus), the message may be **retried** — causing duplicate processing
+>
+> **Examples:**
+> | Agent Type | Recommended Timeout |
+> |------------|---------------------|
+> | Fast API calls | 30-60 seconds |
+> | LLM inference | 120-300 seconds |
+> | File processing | 300-600 seconds |
+> | Long-running ML tasks | 600+ seconds |
+>
+> ```python
+>
+> config = AgentProcessConfig(
+>     name="file-processor",
+>     request_timeout=600.0,
+>     ...
+> )
+> ```
+
+
+
+```
+IDLE → STARTING → RUNNING
+  ↓       ↓          ↓
+STOPPED ← STOPPING ← CRASHED → RESTARTING → STARTING
+```
+
+
+States are automatically persisted to storage (if configured):
+
+```python
+from omnidaemon.storage.base import BaseStore
+
+supervisor = AgentSupervisor(config, store=my_store)
+```
+
+
+
+The supervisor sends periodic pings to check agent health:
+
+```
+Supervisor → Agent: {"type": "ping", "id": "..."}
+Agent → Supervisor: {
+    "id": "...",
+    "status": "ok",
+    "result": {
+        "health": {
+            "uptime_seconds": 120.5,
+            "total_requests": 42,
+            "memory_mb": 125.3,
+            "cpu_percent": 2.1
+        }
+    }
+}
+```
+
+
+```python
+import time
+import psutil
+
+start_time = time.time()
+request_count = 0
+
+async def handle_request(message: dict) -> dict:
+    global request_count
+    
+    if message.get("type") == "ping":
+        return {
+            "health": {
+                "uptime_seconds": time.time() - start_time,
+                "total_requests": request_count,
+                "memory_mb": psutil.Process().memory_info().rss / (1024 * 1024),
+                "cpu_percent": psutil.Process().cpu_percent()
+            }
+        }
+    
+    request_count += 1
+    return {"result": "done"}
+```
+
+
+The supervisor uses 3-phase shutdown for maximum reliability:
+
+```python
+await supervisor.stop()
+```
+
+```python
+```
+
+```python
+```
+
+
+
+Restarts use exponential backoff with jitter:
+
+```python
+delay = min(max_backoff, base_delay * (2 ** attempt))
+final_delay = delay + random(0, delay * 0.1)
+```
+
+Example progression (base=5s):
+- Attempt 1: ~5s
+- Attempt 2: ~10s  
+- Attempt 3: ~20s
+- Circuit breaker opens after max_restart_attempts
+
+
+```python
+config = AgentProcessConfig(
+    name="my-agent",
+    max_restart_attempts=3,
+    restart_backoff_seconds=5.0
+)
+```
+
+When circuit opens (max attempts reached):
+- Agent remains in CRASHED state
+- No more automatic restarts
+- Manual intervention required
+
+
+
+The supervisor automatically saves metrics (when storage configured):
+
+**State Changes:**
+```json
+{
+    "event": "agent_state_change",
+    "agent_name": "my-agent",
+    "old_state": "STARTING",
+    "new_state": "RUNNING",
+    "timestamp": 1701234567.89
+}
+```
+
+**Health Checks:**
+```json
+{
+    "event": "supervisor_health_check",
+    "agent_name": "my-agent",
+    "state": "RUNNING",
+    "cpu_percent": 2.1,
+    "memory_mb": 125.3,
+    "latency_ms": 15.2,
+    "restart_count": 0,
+    "timestamp": 1701234567.89
+}
+```
+
+
+Storage failures don't crash the supervisor:
+
+```python
+supervisor = AgentSupervisor(config, store=unreliable_store)
+```
+
+
+
+All exceptions include actionable remediation steps:
+
+```python
+from omnidaemon.agent_runner.exceptions import AgentStartupError
+
+try:
+    await supervisor.start()
+except AgentStartupError as e:
+    print(e.message)
+    print(e.remediation)
+```
+
+
+| Exception | Cause | Remediation |
+|-----------|-------|-------------|
+| `AgentStartupError` | Agent fails to start | Check command exists, verify permissions, review logs |
+| `AgentCallbackNotFoundError` | Callback not found | Verify function name spelling, check available functions |
+| `AgentDependencyError` | Dependency install failed | Check requirements.txt syntax, verify PyPI packages exist |
+| `AgentTimeoutError` | Request timeout | Increase timeout, check agent responsiveness, review logs |
+| `AgentCrashError` | Repeated crashes | Check logs, test agent standalone, verify dependencies |
+
+
+
+**Symptoms:** Agent immediately crashes or never reaches RUNNING state
+
+**Diagnosis:**
+```bash
+cd agents/my_agent
+python callback.py
+
+python -c "from callback import handle_request"
+
+pip install -r requirements.txt
+```
+
+**Common Fixes:**
+- Missing dependencies → Install requirements.txt
+- Import errors → Fix Python path or package structure
+- Permission denied → `chmod +x` on scripts
+
+
+**Symptoms:** Restart loop, circuit breaker opens
+
+**Diagnosis:**
+```python
+print(supervisor._restart_attempts)
+print(supervisor._state)
+
+```
+
+**Common Fixes:**
+- Systematic bug → Fix code and restart supervisor
+- Resource exhaustion → Increase memory limits
+- External dependency down → Check database/API availability
+
+
+**Symptoms:** Health check warnings in logs
+
+**Diagnosis:**
+```python
+print(supervisor._metadata.last_health_check)
+
+response = await supervisor.handle_event({"type": "ping"})
+```
+
+**Common Fixes:**
+- Agent blocked → Check for long-running synchronous operations
+- Agent crashed → Supervisor will auto-restart
+- Network issues → Verify localhost connectivity
+
+
+**Symptoms:** Storage timeout/error warnings in logs
+
+**Impact:** Metrics not persisted, but supervisor continues operating
+
+**Diagnosis:**
+```python
+await store.save_metric({"test": "data"})
+
+```
+
+**Common Fixes:**
+- Storage down → Restart storage backend
+- Slow storage → Increase timeout (currently 5s)
+- No storage needed → Don't pass `store` parameter
+
+
+
+✅ **DO:**
+- Implement ping/pong health protocol
+- Use async for I/O operations
+- Handle shutdown gracefully
+- Log errors with context
+- Keep agents stateless when possible
+
+❌ **DON'T:**
+- Block event loop with sync operations
+- Ignore shutdown signals
+- Store critical state only in memory
+- Use globals for request state
+- Perform long-running tasks synchronously
+
+
+```python
+config = AgentProcessConfig(
+    name="prod-agent",
+    request_timeout=120.0,
+    heartbeat_interval_seconds=30.0,
+    max_restart_attempts=5,
+    restart_backoff_seconds=10.0,
+    graceful_timeout_sec=30.0
 )
 
-supervisor = AgentSupervisor(config)
-await supervisor.start()
-
-# Use supervisor
-result = await supervisor.handle_event({"content": "Hello"})
+config = AgentProcessConfig(
+    name="dev-agent",
+    request_timeout=10.0,
+    heartbeat_interval_seconds=5.0,
+    max_restart_attempts=1,
+    restart_backoff_seconds=1.0
+)
 ```
 
-## Agent Implementation Requirements
-
-### Python Agents
-
-Your agent must have a callback function that:
-- Is `async def`
-- Takes one parameter: `message: Dict[str, Any]`
-- Returns a `Dict[str, Any]` (or `None`)
-- Include a `requirements.txt` or `pyproject.toml` in the agent directory—OmniDaemon will automatically `pip install` those dependencies into an isolated folder before launching the agent process.
 
 ```python
-# agents/my_agent/callback.py
-async def handle_request(message: Dict[str, Any]) -> Dict[str, Any]:
-    """Entry point callback function"""
-    content = message.get("content", "")
-    # Your agent logic here
-    result = process(content)
-    return {"status": "success", "data": result}
+from unittest.mock import AsyncMock, patch
+
+@patch('asyncio.create_subprocess_exec')
+async def test_supervisor_start(mock_subprocess):
+    mock_subprocess.return_value = AsyncMock()
+    supervisor = AgentSupervisor(config)
+    await supervisor.start()
+    assert supervisor._state == AgentState.RUNNING
+
+async def test_real_agent():
+    supervisor = await create_supervisor_from_directory(
+        agent_name="test",
+        agent_dir="test_agents/simple"
+    )
+    response = await supervisor.handle_event({"test": "data"})
+    await supervisor.stop()
 ```
 
-### Directory Structure
+
+**Overhead (typical Python agent):**
+- Heartbeat: <1% CPU
+- Memory: ~10MB supervisor overhead
+- Latency: <50ms ping/pong roundtrip
+
+**Scalability:**
+- Each agent runs in isolated process
+- Supervisor can manage multiple agents
+- Limited by system resources (CPU, memory, file descriptors)
+
 
 ```
-agents/
-└── my_agent/
-    ├── __init__.py          # Package marker
-    ├── callback.py          # Entry point (contains callback function)
-    ├── agent_impl.py        # Agent implementation
-    └── utils.py             # Helper functions
+┌─────────────────────────────────────┐
+│     BaseAgentRunner (SDK)           │
+│  - Event routing                    │
+│  - Agent registration               │
+└──────────────┬──────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────┐
+│     AgentSupervisor                 │
+│  - Process lifecycle                │
+│  - State management                 │
+│  - Health monitoring                │
+│  - Restart logic                    │
+│  - Storage integration              │
+└──────────────┬──────────────────────┘
+               │ stdio (JSON)
+               ▼
+┌─────────────────────────────────────┐
+│  Python Callback Adapter (subprocess)│
+│  - Loads user callback              │
+│  - Handles ping/pong                │
+│  - Processes tasks                  │
+└──────────────┬──────────────────────┘
+               │
+               ▼
+┌──────────────────────────────────── ┐
+│    User Agent Code                  │
+│  async def handle_request(msg):     │
+│
+└─────────────────────────────────────┘
 ```
 
-### TypeScript Agents (JavaScript-only projects are not supported)
 
-- Your agent code must be written in TypeScript (`.ts`/`.tsx`) and include a `tsconfig.json`.
-- Export an async (Promise-returning) function that receives the JSON payload the supervisor forwards.
-- Compile your TypeScript sources to JavaScript (for example: `npm run build` → `dist/index.js`). The adapter loads the compiled file.
-- The supervisor looks for an entry file in this order:
-  1. `package.json` fields: `omnidaemonEntry`, `module`, `main`, `exports`
-  2. Common build artifacts such as `dist/index.js`, `build/callback.js`, `index.js`
-- Ship your `package.json` + lockfile alongside the callback—OmniDaemon installs dependencies into an isolated folder before startup, so you don’t need to commit `node_modules/`.
-- Provide the exported callback name when using `create_supervisor_from_directory`. The adapter accepts named or default exports.
-- OmniDaemon automatically runs `npm/yarn/pnpm install` (based on your lock file) and your build step (`npm run build` or `tsc`) before launching the agent. Plain JavaScript projects (without TypeScript sources) will be rejected.
+- TypeScript/JavaScript adapter support
+- Go adapter support  
+- Memory limit enforcement
+- CPU limit enforcement
+- Multi-agent coordination
+- Admin API for supervisor control
+- Performance dashboard
 
-## Communication Protocol
 
-The supervisor and agent process communicate via **stdio JSON protocol**:
-
-### Request Format (Supervisor → Agent)
-
-```json
-{
-  "id": "unique-request-id",
-  "type": "task",
-  "payload": {
-    "content": "...",
-    "webhook": "...",
-    "reply_to": "...",
-    ...
-  }
-}
-```
-
-### Response Format (Agent → Supervisor)
-
-```json
-{
-  "id": "unique-request-id",
-  "status": "ok",
-  "result": {
-    "status": "success",
-    "data": "..."
-  }
-}
-```
-
-### Error Response
-
-```json
-{
-  "id": "unique-request-id",
-  "status": "error",
-  "error": "Error message"
-}
-```
-
-## Supervisor Features
-
-### Automatic Restart
-- Monitors process health
-- Automatically restarts on unexpected exit
-- Configurable max restart attempts
-- Exponential backoff between restarts
-
-### Request Correlation
-- Each request gets a unique ID
-- Responses are matched to requests
-- Pending requests are rejected if process restarts
-
-### Timeout Handling
-- Configurable per-request timeout
-- Automatic cleanup of timed-out requests
-- Error propagation to caller
-
-### Process Isolation
-- Each agent runs in its own process
-- No shared memory or state
-- Clean shutdown on supervisor stop
-
-## Language Support
-
-### Currently Supported
-- **Python**: via `python_callback_adapter`
-- **Go**: via `go_callback_adapter`
-- **TypeScript / JavaScript**: via `ts_callback_adapter`
-
-### Extending
-- Implement a stdio adapter for any additional language and register it inside `create_supervisor_from_directory`.
-
-## Key Benefits
-
-1. **Language Agnostic**: Agents can be written in any language
-2. **Process Isolation**: Agents run in separate processes for stability
-3. **No Code Modification**: Existing callbacks work without changes
-4. **Automatic Discovery**: Just provide directory + function name
-5. **Automatic Recovery**: Supervisors restart failed agents
-6. **Event-Driven**: Fully integrated with OmniDaemon's event bus
-
-## Error Handling
-
-- **Process Crashes**: Automatically restarted (if configured)
-- **Request Timeouts**: Propagated to caller with timeout error
-- **Invalid Responses**: Logged and error returned to caller
-- **Import Errors**: Raised during supervisor creation
-- **Missing Callbacks**: Raised during directory discovery
-
-## Shutdown
-
-Always call `shutdown_all_supervisors()` during cleanup:
-
-```python
-try:
-    # ... your code ...
-finally:
-    await sdk.shutdown()
-    await shutdown_all_supervisors()  # Clean shutdown of all agents
-```
-
-This ensures:
-- All agent processes are terminated cleanly
-- Pending requests are handled
-- Resources are freed
-
-## Summary
-
-The agent runner system provides a robust, language-agnostic way to run agents in OmniDaemon:
-
-1. **Register callbacks** with OmniDaemon (as usual)
-2. **Callbacks delegate** to supervisors
-3. **Supervisors manage** agent processes
-4. **Adapters bridge** the communication gap
-5. **Agents run** in isolated processes
-6. **Responses flow** back through the chain
-
-All of this happens automatically - you just provide the directory path and callback function name!
-
+- [Agent Process Types](types.py) - Configuration dataclasses
+- [Python Callback Adapter](python_callback_adapter.py) - Subprocess adapter implementation
+- [Custom Exceptions](exceptions.py) - Error types with remediation
+- [Integration Tests](../../tests/integration/agent_runner/) - Real subprocess tests

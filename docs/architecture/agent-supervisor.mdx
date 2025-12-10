@@ -1,0 +1,223 @@
+---
+title: "Agent Supervisor Architecture"
+description: "Deep dive into process isolation, lifecycle management, and error handling"
+---
+
+# Agent Supervisor Architecture
+
+> **"Add your agent to the SDK, start it, and get production-grade reliability out of the box."**
+
+The **Agent Supervisor** is the core component responsible for process isolation, lifecycle management, and error recovery in OmniDaemon.
+
+## Process Boundaries
+
+OmniDaemon runs each agent in its own isolated process, similar to a container. This ensures that one agent's failure does not impact the rest of the system.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            HOST MACHINE                                     │
+│                                                                             │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │                     OMNIDAEMON PROCESS (PID: 1234)                    │  │
+│  │                                                                       │  │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌───────────────────────────────┐  │  │
+│  │  │     SDK     │  │ AgentRunner │  │     RedisStreamEventBus       │  │  │
+│  │  │  (facade)   │──│  (routing)  │──│  (consume, publish, reclaim)  │  │  │
+│  │  └─────────────┘  └─────────────┘  └───────────────────────────────┘  │  │
+│  │                           │                                           │  │
+│  │           ┌───────────────┼───────────────┐                           │  │
+│  │           │               │               │                           │  │
+│  │           ▼               ▼               ▼                           │  │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                    │  │
+│  │  │ Supervisor1 │  │ Supervisor2 │  │ Supervisor3 │                    │  │
+│  │  │   (stdio)   │  │   (stdio)   │  │   (stdio)   │                    │  │
+│  │  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘                    │  │
+│  └─────────┼────────────────┼────────────────┼───────────────────────────┘  │
+│            │                │                │                              │
+│            ▼                ▼                ▼                              │
+│  ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐                │
+│  │ AGENT PROCESS 1 │ │ AGENT PROCESS 2 │ │ AGENT PROCESS 3 │                │
+│  │   (PID: 5678)   │ │   (PID: 5679)   │ │   (PID: 5680)   │                │
+│  │                 │ │                 │ │                 │                │
+│  │ ┌─────────────┐ │ │ ┌─────────────┐ │ │ ┌─────────────┐ │                │
+│  │ │  Callback   │ │ │ │  Callback   │ │ │ │  Callback   │ │                │
+│  │ │  Adapter    │ │ │ │  Adapter    │ │ │ │  Adapter    │ │                │
+│  │ └─────────────┘ │ │ └─────────────┘ │ │ └─────────────┘ │                │
+│  │ ┌─────────────┐ │ │ ┌─────────────┐ │ │ ┌─────────────┐ │                │
+│  │ │ User Code   │ │ │ │ User Code   │ │ │ │ User Code   │ │                │
+│  │ │ (LLM, DB)   │ │ │ │ (ML Model)  │ │ │ │ (API calls) │ │                │
+│  │ └─────────────┘ │ │ └─────────────┘ │ │ └─────────────┘ │                │
+│  └─────────────────┘ └─────────────────┘ └─────────────────┘                │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Agent Supervisor Lifecycle
+
+The supervisor manages the state of the agent process, handling startups, shutdowns, and crashes automatically.
+
+### State Machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> IDLE: Created
+    IDLE --> STARTING: start()
+    STARTING --> RUNNING: Process ready
+    STARTING --> CRASHED: Start failed
+    RUNNING --> STOPPING: stop()
+    RUNNING --> CRASHED: Process died
+    STOPPING --> STOPPED: Graceful shutdown
+    CRASHED --> STARTING: Auto-restart
+    CRASHED --> STOPPED: Max retries exceeded
+    STOPPED --> [*]
+```
+
+### Internal Architecture
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                      AgentSupervisor                           │
+├────────────────────────────────────────────────────────────────┤
+│                                                                │
+│  State: RUNNING                                                │
+│  Process PID: 5678                                             │
+│  Restart Count: 0                                              │
+│                                                                │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │                    Background Tasks                       │  │
+│  │                                                          │  │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐   │  │
+│  │  │_read_stdout │  │_stream_stderr│  │_run_heartbeat  │   │  │
+│  │  │             │  │             │  │     _loop       │   │  │
+│  │  │ Read JSON   │  │ Forward     │  │ Ping every 30s  │   │  │
+│  │  │ responses   │  │ agent logs  │  │ Check health    │   │  │
+│  │  │ Resolve     │  │ to logger   │  │ Auto-restart    │   │  │
+│  │  │ futures     │  │             │  │ if needed       │   │  │
+│  │  └─────────────┘  └─────────────┘  └─────────────────┘   │  │
+│  └──────────────────────────────────────────────────────────┘  │
+│                                                                │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │                    Pending Requests                       │  │
+│  │  {                                                       │  │
+│  │    "req-123": Future<response>,                          │  │
+│  │    "req-456": Future<response>,                          │  │
+│  │  }                                                       │  │
+│  └──────────────────────────────────────────────────────────┘  │
+│                                                                │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │                    stdio Communication                    │  │
+│  │                                                          │  │
+│  │  OmniDaemon ────stdin───▶ Agent Process                  │  │
+│  │             ◀───stdout─── (JSON protocol)                │  │
+│  │             ◀───stderr─── (logs)                         │  │
+│  └──────────────────────────────────────────────────────────┘  │
+│                                                                │
+└────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Error & Timeout Handling
+
+### Error Path
+
+```mermaid
+sequenceDiagram
+    participant Task as Background Task
+    participant Wrapper as agent_wrapper
+    participant Supervisor as AgentSupervisor
+    participant Reclaim as _reclaim_loop
+
+    Wrapper->>Supervisor: handle_event()
+    Supervisor->>Supervisor: await future
+    Note over Supervisor: 120s timeout expires
+    Supervisor-->>Wrapper: raise TimeoutError
+    
+    Wrapper->>Wrapper: save_metric(task_failed, msg_id, error_type)
+    Wrapper->>Wrapper: _send_error_response(webhook)
+    Wrapper->>Wrapper: logger.error (no traceback)
+    Wrapper-->>Task: raise TimeoutError
+    
+    Task->>Task: catch, log
+    Note over Task: NO XACK!
+    Task->>Task: release semaphore
+    
+    Note over Reclaim: After reclaim_idle_ms
+    Reclaim->>Reclaim: XPENDING, XCLAIM
+    Reclaim->>Task: Retry message
+```
+
+---
+
+## Concurrency Model
+
+### Flowchart
+
+```mermaid
+flowchart TB
+    A[Redis XREADGROUP] -->|batch of 10| B{For each message}
+    B --> C[Acquire Semaphore]
+    C -->|blocked| D{Semaphore full?}
+    D -->|yes| C
+    D -->|no| E[create_task]
+    E --> B
+    B -->|done| A
+    
+    E --> F[_process_message runs in background]
+    F --> G[Call callback chain]
+    G --> H[Wait for agent response]
+    H --> I{Success?}
+    I -->|yes| J[XACK + release semaphore]
+    I -->|no| K[Log + release semaphore]
+    K --> L[Message stays pending for reclaim]
+```
+
+### Concurrency Limits
+
+| Level | Control | Default |
+|-------|---------|---------|
+| Redis batch size | `XREADGROUP count` | 10 |
+| Per-group concurrency | Semaphore | `consumer_count * 10` |
+| Request timeout | `AgentProcessConfig.request_timeout` | 120s |
+| Reclaim interval | `reclaim_interval` | 30s |
+| Reclaim idle threshold | `reclaim_idle_ms` | 180,000ms (3 min) |
+| DLQ retry limit | `dlq_retry_limit` | 3 |
+
+---
+
+## Resource Model
+
+### I/O vs Compute Distribution
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         RESOURCE ALLOCATION                             │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  OmniDaemon Process (I/O Bound - ~1% CPU)                               │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  │  │
+│  │  JSON parsing, async I/O, message routing                         │  │
+│  │  Memory: ~50-100MB (buffers, futures, metadata)                   │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
+│                                                                         │
+│  Agent Processes (CPU/Memory Bound - 99% of work)                       │
+│  ┌─────────────────────┐ ┌─────────────────────┐ ┌─────────────────────┐│
+│  │████████████████████ │ │████████░░░░░░░░░░░░ │ │██████████████████░░ ││
+│  │ Agent 1: LLM Agent  │ │ Agent 2: DB Agent   │ │ Agent 3: ML Agent   ││
+│  │ CPU: 50% | 500MB    │ │ CPU: 10% | 100MB    │ │ CPU: 80% | 2GB      ││
+│  └─────────────────────┘ └─────────────────────┘ └─────────────────────┘│
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Isolation Benefits
+
+| Failure Mode | Impact | Recovery |
+|--------------|--------|----------|
+| Agent 1 crashes | Other agents unaffected | Supervisor auto-restarts |
+| Agent 2 memory leak | Only Agent 2 process grows | Kill + restart |
+| Agent 3 high CPU | Other agents unaffected | OS scheduler handles |
+| OmniDaemon crash | All agents orphaned | Restart OmniDaemon |

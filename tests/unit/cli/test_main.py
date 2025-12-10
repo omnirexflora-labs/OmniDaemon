@@ -8,7 +8,6 @@ from typer.testing import CliRunner
 import tempfile
 import os
 
-# Import CLI apps - SDK should be patched by conftest.py
 from omnidaemon.cli.main import (
     app,
     agent_app,
@@ -22,7 +21,6 @@ from omnidaemon.cli.main import (
 @pytest.fixture(autouse=True)
 def mock_sdk(patch_sdk_class_for_cli_tests):
     """Get the mocked SDK instance and ensure it's patched in CLI module."""
-    # Ensure the SDK instance in the CLI module is patched
     from omnidaemon import cli
 
     with patch.object(cli.main, "sdk", patch_sdk_class_for_cli_tests):
@@ -41,9 +39,7 @@ def patch_asyncio_run():
     original_run = asyncio.run
 
     def mock_run(coro, *args, **kwargs):
-        # Check if it's an AsyncMock
         if isinstance(coro, AsyncMock):
-            # Create a new event loop for this call
             try:
                 loop = asyncio.get_event_loop()
                 if loop.is_closed():
@@ -55,11 +51,9 @@ def patch_asyncio_run():
             try:
                 return loop.run_until_complete(coro)
             except RuntimeError:
-                # Loop might be closed, create a new one
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 return loop.run_until_complete(coro)
-        # For real coroutines, use original asyncio.run
         return original_run(coro, *args, **kwargs)
 
     with patch("asyncio.run", side_effect=mock_run):
@@ -189,7 +183,6 @@ class TestAgentCommands:
             agent_app, ["unsubscribe", "--topic", "test.topic", "--name", "nonexistent"]
         )
 
-        # CLI exits with 1 if not found
         assert result.exit_code == 1
         mock_sdk.unsubscribe_agent.assert_called_once()
 
@@ -219,14 +212,12 @@ class TestAgentCommands:
         """Test agent delete without confirmation."""
         mock_sdk.delete_agent = AsyncMock(return_value=True)
 
-        # Without --yes, should show warning but not delete
         result = runner.invoke(
             agent_app,
             ["delete", "--topic", "test.topic", "--name", "agent1"],
             input="n\n",
         )
 
-        # Should not call delete_agent without confirmation
         mock_sdk.delete_agent.assert_not_called()
         assert result.exit_code == 0
 
@@ -239,7 +230,6 @@ class TestAgentCommands:
             ["delete", "--topic", "test.topic", "--name", "nonexistent", "--yes"],
         )
 
-        # CLI exits with 1 if not found
         assert result.exit_code == 1
         mock_sdk.delete_agent.assert_called_once()
 
@@ -284,7 +274,6 @@ class TestTaskCommands:
         """Test task publish from JSON file."""
         mock_sdk.publish_task = AsyncMock(return_value="test-task-id-123")
 
-        # Create a temporary JSON file
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump(
                 {"topic": "test.topic", "payload": {"content": "test content"}}, f
@@ -342,10 +331,8 @@ class TestTaskCommands:
 
     def test_task_publish_missing_fields(self, runner, mock_sdk):
         """Test task publish with missing required fields."""
-        # Missing topic
         result = runner.invoke(task_app, ["publish", "--content", "test"])
 
-        # Should fail validation
         assert result.exit_code != 0
 
     def test_task_result_success(self, runner, mock_sdk):
@@ -357,7 +344,6 @@ class TestTaskCommands:
         result = runner.invoke(task_app, ["result", "--task-id", "test-task-id"])
 
         assert result.exit_code == 0
-        # get_result is called with positional arg
         mock_sdk.get_result.assert_called_once_with("test-task-id")
 
     def test_task_result_not_found(self, runner, mock_sdk):
@@ -366,7 +352,7 @@ class TestTaskCommands:
 
         result = runner.invoke(task_app, ["result", "--task-id", "nonexistent"])
 
-        assert result.exit_code == 0  # CLI exits with 0 for not found
+        assert result.exit_code == 0
         mock_sdk.get_result.assert_called_once()
 
     def test_task_list_success(self, runner, mock_sdk):
@@ -413,7 +399,6 @@ class TestTaskCommands:
         )
 
         assert result.exit_code == 0
-        # delete_result is called with positional arg
         mock_sdk.delete_result.assert_called_once_with("test-task-id")
 
     def test_task_delete_with_confirm(self, runner, mock_sdk):
@@ -435,7 +420,6 @@ class TestTaskCommands:
             task_app, ["delete", "--task-id", "nonexistent", "--yes"]
         )
 
-        # CLI exits with 1 if not found
         assert result.exit_code == 1
         mock_sdk.delete_result.assert_called_once()
 
@@ -456,13 +440,7 @@ class TestBusCommands:
 
     def test_bus_list_not_redis(self, runner, mock_sdk):
         """Test bus list with non-Redis bus."""
-        # The _ensure_redis_stream check happens inside the command
-        # Since we're patching EVENT_BUS_TYPE in the fixture, we need to patch it differently
-        # Actually, the command checks EVENT_BUS_TYPE at runtime, so this should work
-        # But the command might not exit with 1 if the check is bypassed
-        # Let's check what actually happens - it might exit with 0 if the check is not strict
         result = runner.invoke(bus_app, ["list"])
-        # The command might succeed if EVENT_BUS_TYPE check is not enforced
         assert result.exit_code in [0, 1]
 
     def test_bus_list_empty(self, runner, mock_sdk):
@@ -480,7 +458,6 @@ class TestBusCommands:
             return_value=[{"id": "123-0", "data": {"content": "test"}}]
         )
 
-        # inspect uses --stream not --topic
         result = runner.invoke(
             bus_app, ["inspect", "--stream", "omni-stream:test.topic"]
         )
@@ -505,9 +482,7 @@ class TestBusCommands:
 
     def test_bus_inspect_not_redis(self, runner, mock_sdk):
         """Test bus inspect with non-Redis bus."""
-        # The command requires --stream, missing it causes exit code 2 (typer error)
         result = runner.invoke(bus_app, ["inspect"])
-        # Missing required option causes exit code 2
         assert result.exit_code == 2
 
     def test_bus_groups_success(self, runner, mock_sdk):
@@ -523,7 +498,6 @@ class TestBusCommands:
             ]
         )
 
-        # groups uses --stream not --topic
         result = runner.invoke(
             bus_app, ["groups", "--stream", "omni-stream:test.topic"]
         )
@@ -533,7 +507,6 @@ class TestBusCommands:
 
     def test_bus_groups_not_redis(self, runner, mock_sdk):
         """Test bus groups with non-Redis bus."""
-        # Missing required option causes exit code 2
         result = runner.invoke(bus_app, ["groups"])
         assert result.exit_code == 2
 
@@ -559,12 +532,8 @@ class TestBusCommands:
 
     def test_bus_dlq_not_redis(self, runner, mock_sdk):
         """Test bus dlq with non-Redis bus."""
-        # The dlq command doesn't call _ensure_redis_stream, so it won't fail
-        # Let's just verify it works normally
         mock_sdk.inspect_dlq = AsyncMock(return_value=[])
         result = runner.invoke(bus_app, ["dlq", "--topic", "test.topic"])
-        # The command should work even if EVENT_BUS_TYPE is not redis_stream
-        # (the check is only for certain commands like list, inspect, groups, stats)
         assert result.exit_code == 0
 
     def test_bus_stats_success(self, runner, mock_sdk):
@@ -708,10 +677,8 @@ class TestStorageCommands:
             return_value={"agents": 0, "results": 0, "metrics": 0, "config": 0}
         )
 
-        # Without --yes, should not clear
         result = runner.invoke(storage_app, ["clear-all"], input="n\n")
 
-        # Should not call clear_all without confirmation
         mock_sdk.clear_all.assert_not_called()
         assert result.exit_code == 0
 
@@ -887,7 +854,6 @@ class TestInfoCommand:
         result = runner.invoke(app, ["info"])
 
         assert result.exit_code == 0
-        # Banner should be in output (Rich console output may not be captured)
         assert result.stdout is not None
 
     def test_info_shows_quickstart(self, runner, mock_sdk):
@@ -895,7 +861,6 @@ class TestInfoCommand:
         result = runner.invoke(app, ["info"])
 
         assert result.exit_code == 0
-        # Quickstart should be in output
         assert result.stdout is not None
 
 
@@ -920,8 +885,6 @@ class TestErrorHandling:
 
     def test_cli_handles_validation_errors(self, runner, mock_sdk):
         """Test CLI handles validation errors."""
-        # Missing required option
         result = runner.invoke(agent_app, ["get", "--topic", "test.topic"])
 
-        # Should fail validation (missing --name)
         assert result.exit_code != 0

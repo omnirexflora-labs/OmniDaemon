@@ -138,7 +138,6 @@ class BaseAgentRunner:
                 message = {**message, "topic": topic}
             message["agent"] = agent_name
 
-            # Track task received
             await self.store.save_metric(
                 {
                     "topic": topic,
@@ -160,7 +159,6 @@ class BaseAgentRunner:
 
                 await self._send_response(message, result)
 
-                # Track successful processing
                 await self.store.save_metric(
                     {
                         "topic": topic,
@@ -174,7 +172,6 @@ class BaseAgentRunner:
                 )
 
             except Exception as e:
-                # Track failure
                 await self.store.save_metric(
                     {
                         "topic": topic,
@@ -182,13 +179,26 @@ class BaseAgentRunner:
                         "runner_id": self.runner_id,
                         "event": "task_failed",
                         "task_id": message.get("task_id"),
+                        "msg_id": message.get("msg_id"),
                         "error": str(e),
+                        "error_type": type(e).__name__,
                         "timestamp": time.time(),
                     }
                 )
-                logger.exception(
-                    f"[Runner {self.runner_id}] Error in agent '{agent_name}': {e}"
-                )
+
+                error_type = "timeout" if isinstance(e, TimeoutError) else "error"
+                await self._send_error_response(message, str(e), error_type)
+
+                if isinstance(e, TimeoutError):
+                    logger.error(
+                        f"[Runner {self.runner_id}] Timeout in agent '{agent_name}' "
+                        f"(task_id={message.get('task_id')}): {e}"
+                    )
+                else:
+                    logger.exception(
+                        f"[Runner {self.runner_id}] Error in agent '{agent_name}' "
+                        f"(task_id={message.get('task_id')}): {e}"
+                    )
                 raise
 
         return agent_wrapper
@@ -263,7 +273,6 @@ class BaseAgentRunner:
             except Exception as e:
                 logger.error(f"Failed to save result for {task_id}: {e}")
 
-        # Send webhook if requested
         if webhook_url:
             MAX_RETRIES = 3
             BACKOFF_FACTOR = 2
@@ -294,13 +303,59 @@ class BaseAgentRunner:
                         )
 
             logger.info(f"Task {task_id} completed. Webhook delivery finalized.")
-        # publish the new event as response
         if reply_to:
             new_task_id = await self.publish_response(message, result)
             logger.info(f"Response published with task_id: {new_task_id}")
 
         else:
             logger.debug(f"Task {task_id} completed (no webhook). Result stored.")
+
+    async def _send_error_response(
+        self, message: Dict[str, Any], error: str, error_type: str = "error"
+    ) -> None:
+        """
+        Send error response via webhook if configured.
+
+        This method sends an error notification to the webhook URL if one was
+        specified in the original message. This ensures callers know about failures.
+
+        Args:
+            message: The original message/event that triggered the agent
+            error: Error message string
+            error_type: Type of error (e.g., 'timeout', 'error')
+        """
+        webhook_url = message.get("webhook")
+        task_id = message.get("task_id")
+
+        if not webhook_url:
+            return
+
+        error_payload = {
+            "task_id": task_id,
+            "topic": message.get("topic"),
+            "agent": message.get("agent"),
+            "runner_id": self.runner_id,
+            "status": "failed",
+            "error": error,
+            "error_type": error_type,
+            "timestamp": time.time(),
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    webhook_url,
+                    json={"payload": error_payload},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    logger.info(
+                        f"Error webhook sent to {webhook_url} [status={resp.status}] "
+                        f"for task {task_id}"
+                    )
+        except Exception as webhook_err:
+            logger.warning(
+                f"Failed to send error webhook for task {task_id}: {webhook_err}"
+            )
 
     async def publish_response(
         self, message: Dict[str, Any], result: Any

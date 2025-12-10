@@ -105,115 +105,170 @@ python -c "import omnidaemon; print('✅ OmniDaemon installed!')"
 
 ---
 
-## Step 3: Create Your First Agent
+## Step 3: Create Your First Agent (Production-Ready)
 
-Create a file called `agent_runner.py`:
+> **We'll use the Supervisor pattern** - for process isolation and auto-recovery.
 
-### SIMPLE VERSION (Required parameters only)
+### Create Agent Directory
+
+```bash
+mkdir my_first_agent
+cd my_first_agent
+```
+
+Create `callback.py`:
+```python
+# my_first_agent/callback.py
+def greeter_callback(message: dict):
+    """
+    Agent logic runs here - in an isolated process!
+    In production: LangGraph, CrewAI, AutoGen, etc.
+    """
+    content = message.get("content", {})
+    name = content.get("name", "stranger")
+    return {"reply": f"Hello, {name}! 👋"}
+```
+
+Create `__init__.py`:
+```bash
+touch __init__.py
+```
+
+**Directory structure:**
+```
+my-omnidaemon-project/
+├── my_first_agent/
+│   ├── __init__.py
+│   └── callback.py
+└── (agent_runner.py - next step)
+```
+
+Go back to parent:
+```bash
+cd ..
+```
+
+###Create Agent Runner
+
+Create `agent_runner.py`:
+```python
+# agent_runner.py - Production-ready with Supervisor
+import asyncio
+import logging
+import sys
+from omnidaemon import OmniDaemonSDK, AgentConfig
+from omnidaemon.agent_runner.agent_supervisor_runner import (
+    create_supervisor_from_directory,
+    shutdown_all_supervisors,
+)
+
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+logger = logging.getLogger(__name__)
+
+sdk = OmniDaemonSDK()
+_supervisor = None
+
+async def get_supervisor():
+    global _supervisor
+    if _supervisor is None:
+        _supervisor = await create_supervisor_from_directory(
+            agent_name="greeter",
+            agent_dir="./my_first_agent",
+            callback_function="callback.greeter_callback",
+        )
+    return _supervisor
+
+async def greeter_handler(message: dict):
+    supervisor = await get_supervisor()
+    return await supervisor.handle_event(message)
+
+async def main():
+    try:
+        await get_supervisor()  # Pre-initialize
+        
+        await sdk.register_agent(
+            agent_config=AgentConfig(
+                topic="greet.user",
+                callback=greeter_handler,
+            )
+        )
+        
+        await sdk.start()
+        logger.info("🎧 Agent running. Press Ctrl+C to stop.")
+        await asyncio.Event().wait()
+        
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        logger.info("Shutdown...")
+    finally:
+        await sdk.shutdown()
+        await shutdown_all_supervisors()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+**What this provides:**
+- ✅ Process isolation (like containers)
+- ✅ Auto-restart on crash
+- ✅ Multi-language support
+- ✅ Fault containment
+
+---
+
+### 📚 Working Examples
+
+Want to see complete, production-ready implementations? Check these out:
+
+#### **Multiple Supervised Agents**
+[`examples/agents_with_supervisors/`](https://github.com/omnirexflora-labs/OmniDaemon/tree/main/examples/agents_with_supervisors)
+
+Shows real-world patterns:
+- Multiple agents with supervisors in one runner
+- Google ADK with MCP filesystem tools
+- Proper initialization and graceful shutdown
+
+**Key files to study:**
+- [`supervisor_agent_runners.py`](https://github.com/omnirexflora-labs/OmniDaemon/blob/main/examples/agents_with_supervisors/supervisor_agent_runners.py) - Runner setup
+- [`google_adk_with_supervisor/callback.py`](https://github.com/omnirexflora-labs/OmniDaemon/blob/main/examples/google_adk_with_supervisor/callback.py) - Agent logic
+- [`google_adk_with_supervisor/adk_agent.py`](https://github.com/omnirexflora-labs/OmniDaemon/blob/main/examples/google_adk_with_supervisor/adk_agent.py) - ADK setup
+
+> 💡 **These examples are your best teacher.** Copy their patterns for production use.
+
+---
+
+### Development Alternative (Simple)
+
+For quick prototyping only (no isolation):
 
 ```python
-# agent_runner.py - SIMPLE VERSION
+# agent_runner_simple.py - DEV ONLY
 import asyncio
 from omnidaemon import OmniDaemonSDK, AgentConfig
 
 sdk = OmniDaemonSDK()
 
-# CALLBACK = Where your AI agent runs!
-# This function is called when a message arrives
 async def greeter(message: dict):
-    """
-    This is YOUR callback - where your logic/AI agent executes.
-
-    For this simple example, we just return a greeting.
-    In real apps, this is where you'd call your AI agent.
-
-    See real examples:
-    - examples/omnicoreagent/agent_runner.py (OmniCore)
-    - examples/google_adk/agent_runner.py (Google ADK)
-    """
-    content = message.get("content", {})
-    name = content.get("name", "stranger")
-    return {"reply": f"Hello, {name}! 👋"}
+    name = message.get("content", {}).get("name", "stranger")
+    return {"reply": f"Hello, {name}!"}
 
 async def main():
-    # Register agent - only topic and callback are required!
     await sdk.register_agent(
-        agent_config=AgentConfig(
-            topic="greet.user",      # REQUIRED: Where to listen
-            callback=greeter,         # REQUIRED: Your function (where AI agent runs)
-        )
+        agent_config=AgentConfig(topic="greet.user", callback=greeter)
     )
-
     await sdk.start()
-    print("🎧 Agent running. Press Ctrl+C to stop.")
-
     try:
         while True:
             await asyncio.sleep(1)
     except KeyboardInterrupt:
-        pass
-    finally:
         await sdk.shutdown()
 
 if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-### FULL VERSION (With all optional parameters)
+**⚠️ Limitations:** No isolation, no auto-restart. Use Supervisor for production.
 
-```python
-# agent_runner.py - FULL VERSION
-import asyncio
-from omnidaemon import OmniDaemonSDK, AgentConfig, SubscriptionConfig
-
-sdk = OmniDaemonSDK()
-
-async def greeter(message: dict):
-    """Your AI agent logic"""
-    content = message.get("content", {})
-    name = content.get("name", "stranger")
-    return {"reply": f"Hello, {name}! 👋"}
-
-async def main():
-    await sdk.register_agent(
-        agent_config=AgentConfig(
-            topic="greet.user",                    # REQUIRED
-            callback=greeter,                       # REQUIRED
-            name="greeter-agent",                   # Optional (default: auto-generated)
-            description="A friendly greeting agent", # Optional
-            version="1.0.0",                        # Optional
-            tags=["greeting", "demo"],              # Optional
-            config=SubscriptionConfig(
-                max_retries=3,                      # Optional (default: 3)
-                reclaim_idle_ms=300000,             # Optional (default: 5 min)
-                dlq_enabled=True,                   # Optional (default: True)
-            )
-        )
-    )
-
-    await sdk.start()
-    print("🎧 Agent running. Press Ctrl+C to stop.")
-
-    try:
-        while True:
-            await asyncio.sleep(1)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        await sdk.shutdown()
-
-if __name__ == "__main__":
-    asyncio.run(main())
-```
-
-**Parameter Defaults:**
-- `name`: Auto-generated from topic
-- `description`: None
-- `version`: "1.0.0"
-- `tags`: []
-- `config.max_retries`: 3
-- `config.reclaim_idle_ms`: 300000 (5 minutes)
-- `config.dlq_enabled`: True
+---
 
 ---
 

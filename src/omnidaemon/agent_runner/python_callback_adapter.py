@@ -13,15 +13,16 @@ Usage:
 import asyncio
 import json
 import logging
+import os
 import sys
+import time
 import importlib
 from typing import Any, Callable, Dict, Optional
 
-# Configure logging to use stderr so stdout is only for JSON responses
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    stream=sys.stderr,  # Logs go to stderr, not stdout
+    stream=sys.stderr,
 )
 logger = logging.getLogger("PythonCallbackAdapter")
 
@@ -43,6 +44,19 @@ class PythonCallbackAdapter:
         self.module_path = module_path
         self.function_name = function_name
         self.callback: Optional[Callable] = None
+        self.start_time = time.time()
+        self.total_requests = 0
+        self.failed_requests = 0
+
+        try:
+            import psutil
+
+            self._process = psutil.Process(os.getpid())
+            self._process.cpu_percent(interval=None)
+            logger.debug("CPU measurement baseline established")
+        except ImportError:
+            self._process = None
+            logger.warning("psutil not available, CPU metrics will be 0")
 
     def _load_callback(self) -> None:
         """Dynamically import the module and get the callback function."""
@@ -73,7 +87,6 @@ class PythonCallbackAdapter:
         loop = asyncio.get_running_loop()
 
         while True:
-            # Read line from stdin (blocking, but we run in executor)
             line = await loop.run_in_executor(None, sys.stdin.readline)
             if not line:
                 break
@@ -103,6 +116,10 @@ class PythonCallbackAdapter:
                 )
                 break
 
+            if message_type == "ping":
+                await self._handle_ping(request_id)
+                continue
+
             if message_type != "task":
                 logger.warning(f"Unknown message type: {message_type}")
                 await self._send_error_response(
@@ -110,21 +127,66 @@ class PythonCallbackAdapter:
                 )
                 continue
 
-            await self._handle_task(envelope)
+            asyncio.create_task(self._handle_task(envelope))
+
+    async def _handle_ping(self, request_id: Optional[str]) -> None:
+        """Handle a ping health check request."""
+        try:
+            if self._process is not None:
+                try:
+                    memory_info = self._process.memory_info()
+                    memory_mb = memory_info.rss / (1024 * 1024)
+
+                    cpu_percent = self._process.cpu_percent(interval=0.1)
+
+                    logger.debug(
+                        f"Process metrics: CPU={cpu_percent}%, Memory={memory_mb}MB"
+                    )
+                except Exception as e:
+                    logger.warning(f"Error getting process metrics: {e}")
+                    memory_mb = 0.0
+                    cpu_percent = 0.0
+            else:
+                memory_mb = 0.0
+                cpu_percent = 0.0
+
+            uptime = time.time() - self.start_time
+
+            health_data = {
+                "process_id": os.getpid(),
+                "uptime_seconds": uptime,
+                "total_requests": self.total_requests,
+                "failed_requests": self.failed_requests,
+                "memory_mb": memory_mb,
+                "cpu_percent": cpu_percent,
+            }
+
+            await self._send_response(
+                {
+                    "id": request_id,
+                    "status": "ok",
+                    "result": {
+                        "type": "pong",
+                        "health": health_data,
+                    },
+                }
+            )
+        except Exception as exc:
+            logger.exception(f"Error handling ping: {exc}")
+            await self._send_error_response(request_id, str(exc))
 
     async def _handle_task(self, envelope: Dict[str, Any]) -> None:
         """Handle a task by calling the wrapped callback function."""
         assert self.callback is not None
 
+        self.total_requests += 1
+
         request_id = envelope.get("id")
-        # The payload IS the message dict that OmniDaemon would pass to the callback
         message = envelope.get("payload") or {}
 
         try:
-            # Call the original callback function with the message
             result = await self._maybe_await(self.callback(message))
 
-            # Ensure result is a dict
             if result is None:
                 result = {"status": "completed"}
             elif not isinstance(result, dict):
@@ -138,6 +200,7 @@ class PythonCallbackAdapter:
                 }
             )
         except Exception as exc:
+            self.failed_requests += 1
             logger.exception(f"Error calling callback '{self.function_name}': {exc}")
             await self._send_error_response(request_id, str(exc))
 

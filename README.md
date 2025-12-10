@@ -19,27 +19,27 @@
 
 ---
 
-## 🌊 Why OmniDaemon Exists: The Challenges with Scaling Intelligent Agents
+## 🌊 Why OmniDaemon Exists: The "Single Process" Trap
 
-> **This is the foundational reason OmniDaemon was built.** Understanding this will help you see why event-driven architecture is not just a technical choice, but a necessity for building scalable AI agent systems.
+> **Most AI frameworks run everything in a single Python process. One crash kills your entire system.**
 
-> _Perspectives in this section draw on Sean Falconer's analysis in ["The Future of AI Agents is Event-Driven"](https://seanfalconer.medium.com/the-future-of-ai-agents-is-event-driven-9e25124060d6)._ [[source]](https://seanfalconer.medium.com/the-future-of-ai-agents-is-event-driven-9e25124060d6)
+### The Problem
+Frameworks like LangGraph, CrewAI, and AutoGen are great for *building* agent logic, but they run as a single process.
+*   ❌ **One agent crashes?** The entire process dies.
+*   ❌ **Memory leak?** Affects all agents in the process.
+*   ❌ **No fault isolation** Each agent shares the same memory space.
 
-### The Core Challenge
+### The OmniDaemon Solution: Process Isolation
+OmniDaemon runs **each agent in its own isolated process** (like containers), managed by a Supervisor.
+*   ✅ **Fault Isolation**: If Agent A crashes, Agent B keeps running.
+*   ✅ **Auto-Recovery**: Supervisors automatically restart crashed agents.
+*   ✅ **Multi-Language**: Run Python, Go, TypeScript agents side-by-side.
+*   ✅ **Resource Safety**: Clean memory/CPU boundaries per agent.
 
-Scaling agents — whether a single agent or a collaborative system — hinges on their ability to access and share data effortlessly. Agents need to gather information from multiple sources, including other agents, tools, and external systems, to make decisions and take action.
+**Think of it like Kubernetes Pods:**  
+Each agent runs in its own "container" (process) but shares the underlying host resources (CPU, memory). One pod crash doesn't affect others, and the orchestrator (Supervisor) handles lifecycle management.
 
-**Single agent dependencies**
-
-Connecting agents to the tools and data they need is fundamentally a **distributed systems problem**. This complexity mirrors the challenges faced in designing microservices, where components must communicate efficiently without creating bottlenecks or rigid dependencies.
-
-Like microservices, agents must communicate efficiently and ensure their outputs are useful across the broader system. And like any service, their outputs shouldn't just loop back into the AI application — they should flow into other critical systems like data warehouses, CRMs, CDPs, and customer success platforms.
-
-Sure, you could connect agents and tools through RPC and APIs, but that's a recipe for **tightly coupled systems**. Tight coupling makes it harder to scale, adapt, or support multiple consumers of the same data. Agents need flexibility. Their outputs must seamlessly feed into other agents, services, and platforms without locking everything into rigid dependencies.
-
-### What's the Solution?
-
-**Loose coupling through an event-driven architecture.** It's the backbone that allows agents to share information, act in real time, and integrate with the broader ecosystem — without the headaches of tight coupling.
+> 👉 **See the deep dive:** [OmniDaemon vs Other Frameworks](docs/core-concepts/vs-other-frameworks.mdx)
 
 ---
 
@@ -232,6 +232,49 @@ It works seamlessly alongside HTTP, WebSockets, and SSE — and often *powers th
 
 ---
 
+## 🏭 Production Mode: Agent Supervisors
+
+> **Refactoring from "Simple Mode" to "Production Mode" is easy.**
+
+### When to use Supervisors?
+*   **Simple Mode** (`sdk.register_agent`): Great for lightweight tasks, development, and simple logic. Runs in the main process.
+*   **Supervisor Mode** (`create_supervisor_from_directory`): **REQUIRED for production AI agents.** Runs in a separate process with auto-restart, crash protection, and full isolation.
+
+### How to implement
+
+1.  **Structure your agent**:
+    ```text
+    my_agent/
+    ├── __init__.py
+    ├── agent.py       # Your AI agent class/logic
+    └── requirements.txt
+    ```
+
+2.  **Use the Supervisor in `agent_runner.py`**:
+    ```python
+    from omnidaemon.supervisor import create_supervisor_from_directory
+
+    # Create a supervisor that manages the agent process
+    supervisor = await create_supervisor_from_directory(
+        agent_name="my_robust_agent",
+        agent_dir="./my_agent",                 # Directory containing code
+        callback_function="my_agent.callback",  # Function to call inside that dir
+        watch_paths=["./my_agent"]              # Auto-reload on code change!
+    )
+
+    # Register the supervisor to handle events
+    await sdk.register_agent(
+        agent_config=AgentConfig(topic="my.topic"),
+        callback=supervisor.handle_event        # Supervisor handles the event!
+    )
+    ```
+
+> 📚 **See full examples:**
+> *   [`examples/agents_with_supervisors`](examples/agents_with_supervisors)
+> *   [`examples/google_adk_with_supervisor`](examples/google_adk_with_supervisor)
+
+---
+
 ## 🚀 Quick Start
 
 Get OmniDaemon running in **5 minutes** with zero prior knowledge. Follow each step carefully.
@@ -353,48 +396,69 @@ python -c "import omnidaemon; print('✅ OmniDaemon installed from source!')"
 
 ---
 
-### Step 3: Create Your First Agent
+### Step 3: Create Your First Agent (Production-Ready)
 
-Create a file called `agent_runner.py` (this is your agent runner that registers and starts agents):
+> **We'll start with the production way** - using Supervisors for process isolation.  
+> This is how you should run AI agents in real applications.
 
-#### 📝 **Simple Version** (Minimal - Most Common)
+#### 📁 Create Agent Directory Structure
 
+```bash
+mkdir my_first_agent
+cd my_first_agent
+```
+
+Create `my_first_agent/agent.py`:
 ```python
-# agent_runner.py - SIMPLE VERSION
+# my_first_agent/agent.py
+def greeter_callback(message: dict):
+    """
+    This is YOUR agent callback - runs in an isolated process!
+    
+    In production, this is where you'd call:
+    - LangGraph workflows
+    - CrewAI crews
+    - AutoGen conversations
+    - Custom AI logic
+    """
+    content = message.get("content", {}).get("name", "stranger")
+    print(f"📨 Processing request for: {content}")
+    return {"reply": f"Hello, {content}! Welcome to OmniDaemon. 🎉"}
+```
+
+Create `my_first_agent/__init__.py` (empty file):
+```bash
+touch my_first_agent/__init__.py
+```
+
+#### 🏃 Create Agent Runner
+
+Create `agent_runner.py` (in parent directory):
+```python
+# agent_runner.py - PRODUCTION-READY with Supervisor
 import asyncio
 from omnidaemon import OmniDaemonSDK, AgentConfig
+from omnidaemon.supervisor import create_supervisor_from_directory
 
 sdk = OmniDaemonSDK()
 
-# CALLBACK = Where your AI agent runs!
-# This function is called when a message arrives
-async def greeter(message: dict):
-    """
-    This is YOUR callback - where your logic/AI agent executes.
-
-    For this simple example, we just return a greeting.
-    In real apps, this is where you'd call your AI agent.
-
-    See real examples:
-    - examples/omnicoreagent/agent_runner.py (OmniCore)
-    - examples/google_adk/agent_runner.py (Google ADK)
-    """
-    content = message.get("content", "")
-    print(f"📨 Processing request for: {content}")
-    return {"reply": f"Hello, {content}! Welcome to OmniDaemon. 🎉"}
-
 async def main():
-    # Register agent - only topic and callback are required!
-    await sdk.register_agent(
-        agent_config=AgentConfig(
-            topic="greet.user",      # REQUIRED: Where to listen
-            callback=greeter,         # REQUIRED: Your function (where AI agent runs)
-        )
+    # Create supervisor for your agent (runs in separate process)
+    supervisor = await create_supervisor_from_directory(
+        agent_name="greeter_agent",
+        agent_dir="./my_first_agent",          # Directory with agent code
+        callback_function="agent.greeter_callback"  # Function to call
     )
-
+    
+    # Register supervisor with event bus
+    await sdk.register_agent(
+        agent_config=AgentConfig(topic="greet.user"),
+        callback=supervisor.handle_event  # Supervisor handles the event
+    )
+    
     await sdk.start()
-    print("🎧 Agent running. Press Ctrl+C to stop.")
-
+    print("🎧 Agent running in isolated process. Press Ctrl+C to stop.")
+    
     try:
         while True:
             await asyncio.sleep(1)
@@ -407,7 +471,115 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-**🤖 Understanding the Callback:**
+**Your directory structure:**
+```
+my-omnidaemon-project/
+├── my_first_agent/
+│   ├── __init__.py
+│   └── agent.py
+└── agent_runner.py
+```
+
+**Run it:**
+```bash
+python agent_runner.py
+```
+
+**What you get:**
+- ✅ Agent runs in **isolated process** (like a container)
+- ✅ Crashes in agent **won't kill** other agents
+- ✅ **Auto-restart** if the agent crashes
+- ✅ **Multi-language** support (Python, Go, TypeScript)
+- ✅ Event-driven communication via Redis Streams
+
+---
+
+### 📚 Working Examples
+
+**Want to see complete implementations?** Check out these production-ready examples:
+
+#### 1. **Multiple Agents with Supervisors**
+[`examples/agents_with_supervisors/`](examples/agents_with_supervisors/)
+
+Shows how to run multiple agents with supervisors in one runner:
+- Google ADK agent with filesystem access
+- Response handler agent
+- Proper supervisor initialization and shutdown
+
+**Key files:**
+- [`supervisor_agent_runners.py`](examples/agents_with_supervisors/supervisor_agent_runners.py) - Runner with multiple supervised agents
+- [`google_adk_with_supervisor/callback.py`](examples/google_adk_with_supervisor/callback.py) - Agent logic
+- [`google_adk_with_supervisor/adk_agent.py`](examples/google_adk_with_supervisor/adk_agent.py) - ADK initialization
+
+#### 2. **Google ADK with Supervisor**
+[`examples/google_adk_with_supervisor/`](examples/google_adk_with_supervisor/)
+
+Full Google ADK integration with MCP tools:
+- File system operations via MCP server
+- Supervised process management
+- Real LLM agent with tools
+
+**Run it:**
+```bash
+cd examples/agents_with_supervisors
+python supervisor_agent_runners.py
+```
+
+Then publish events:
+```bash
+python ../publisher.py
+```
+
+> 💡 **These examples are your best learning resource.** They show real patterns you'll use in production.
+
+---
+
+#### 🔄 **Simple Alternative** (Development Only)
+
+> **For quick testing/prototyping only.** Not recommended for production.
+
+```python
+# agent_runner_simple.py - DEVELOPMENT ONLY
+import asyncio
+from omnidaemon import OmniDaemonSDK, AgentConfig
+
+sdk = OmniDaemonSDK()
+
+async def greeter(message: dict):
+    content = message.get("content", {}).get("name", "stranger")
+    return {"reply": f"Hello, {content}!"}
+
+async def main():
+    await sdk.register_agent(
+        agent_config=AgentConfig(
+            topic="greet.user",
+            callback=greeter,  # Runs in main process
+        )
+    )
+    await sdk.start()
+    
+    try:
+        while True:
+            await asyncio.sleep(1)
+    except KeyboardInterrupt:
+        await sdk.shutdown()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+**Limitations:**
+- ❌ Runs in main process (no isolation)
+- ❌ No auto-restart on crash
+- ❌ One crash can kill everything
+
+**👉 Use Supervisor pattern (Step 3 above) for production.**
+
+---
+
+**🤖 Understanding Supervisors:**
+
+Supervisors manage your agent's lifecycle:
 
 The `callback` is **WHERE YOUR AI AGENT RUNS**. When a message arrives:
 1. OmniDaemon calls your callback function

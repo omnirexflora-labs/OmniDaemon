@@ -43,13 +43,12 @@ async def event_bus():
     bus.connect = AsyncMock()
     bus.close = AsyncMock()
 
-    # Make publish return the task ID from the event payload
     async def mock_publish(event_payload, maxlen=None):
         return event_payload.get("id", "task-123")
 
     bus.publish = AsyncMock(side_effect=mock_publish)
 
-    bus.subscribe = AsyncMock()  # Don't start consume loops
+    bus.subscribe = AsyncMock()
     bus.unsubscribe = AsyncMock()
     bus.get_consumers = AsyncMock(return_value={})
     bus._running = False
@@ -78,19 +77,15 @@ class TestEndToEndWorkflows:
             results.append(result)
             return result
 
-        # Register agent
         agent_config = AgentConfig(
             topic="test.topic", callback=agent_callback, name="test-agent"
         )
         await sdk.register_agent(agent_config)
 
-        # Start the runner in background (it may block, so run as task)
         start_task = asyncio.create_task(sdk.start())
 
-        # Give it a moment to initialize
         await asyncio.sleep(0.1)
 
-        # Publish a task
         event = EventEnvelope(
             topic="test.topic",
             payload=PayloadBase(content=json.dumps({"action": "test"})),
@@ -98,13 +93,11 @@ class TestEndToEndWorkflows:
         task_id = await sdk.publish_task(event)
         assert task_id is not None
 
-        # Wait for processing (with timeout)
         max_wait = 5.0
         start_time = time.time()
         while len(results) == 0 and (time.time() - start_time) < max_wait:
             await asyncio.sleep(0.1)
 
-        # Stop and cancel start task
         await sdk.stop()
         start_task.cancel()
         try:
@@ -112,8 +105,6 @@ class TestEndToEndWorkflows:
         except asyncio.CancelledError:
             pass
 
-        # Verify result was processed (if processing worked)
-        # Note: With fakeredis, actual processing may not work, so we just verify publishing
         assert task_id is not None
 
         await sdk.shutdown()
@@ -132,7 +123,6 @@ class TestEndToEndWorkflows:
             results_agent2.append(message.get("content"))
             return {"agent": "agent2", "processed": True}
 
-        # Register two agents on the same topic
         await sdk.register_agent(
             AgentConfig(topic="shared.topic", callback=agent1_callback, name="agent1")
         )
@@ -140,16 +130,12 @@ class TestEndToEndWorkflows:
             AgentConfig(topic="shared.topic", callback=agent2_callback, name="agent2")
         )
 
-        # Don't start - just test publishing (start() can block with fakeredis)
-        # Publish a task
         event = EventEnvelope(
             topic="shared.topic",
             payload=PayloadBase(content=json.dumps({"test": "data"})),
         )
         task_id = await sdk.publish_task(event)
 
-        # With fakeredis, actual processing may not work
-        # Just verify tasks were published and agents registered
         assert task_id is not None
 
         await sdk.shutdown()
@@ -170,16 +156,12 @@ class TestEndToEndWorkflows:
             AgentConfig(topic="retry.topic", callback=failing_agent, name="retry-agent")
         )
 
-        # Don't start - just test publishing (start() can block with fakeredis)
-        # Publish a task
         event = EventEnvelope(
             topic="retry.topic",
             payload=PayloadBase(content=json.dumps({"test": "retry"})),
         )
         task_id = await sdk.publish_task(event)
 
-        # With fakeredis, actual processing/retries may not work
-        # Just verify task was published
         assert task_id is not None
 
         await sdk.shutdown()
@@ -194,7 +176,6 @@ class TestEndToEndWorkflows:
             attempt_count[0] += 1
             raise Exception("Permanent failure")
 
-        # Register agent with low retry limit
         await sdk.register_agent(
             AgentConfig(
                 topic="dlq.topic",
@@ -204,15 +185,11 @@ class TestEndToEndWorkflows:
             )
         )
 
-        # Don't start - just test publishing (start() can block with fakeredis)
-        # Publish a task
         event = EventEnvelope(
             topic="dlq.topic", payload=PayloadBase(content=json.dumps({"test": "dlq"}))
         )
         task_id = await sdk.publish_task(event)
 
-        # With fakeredis, actual DLQ processing may not work
-        # Just verify task was published
         assert task_id is not None
 
         await sdk.shutdown()
@@ -224,7 +201,6 @@ class TestEndToEndWorkflows:
         async def agent_with_webhook(message):
             return {"status": "completed", "data": message.get("content")}
 
-        # Mock webhook HTTP call
         with patch("aiohttp.ClientSession") as mock_session:
             mock_resp = AsyncMock()
             mock_resp.status = 200
@@ -247,8 +223,6 @@ class TestEndToEndWorkflows:
                 )
             )
 
-            # Don't start - just test publishing
-            # Publish task with webhook
             event = EventEnvelope(
                 topic="webhook.topic",
                 payload=PayloadBase(
@@ -258,8 +232,6 @@ class TestEndToEndWorkflows:
             )
             task_id = await sdk.publish_task(event)
 
-            # With fakeredis, actual processing may not work
-            # Just verify task was published
             assert task_id is not None
 
             await sdk.shutdown()
@@ -278,18 +250,14 @@ class TestEndToEndWorkflows:
             """Main agent that triggers reply."""
             return {"status": "done", "reply_data": message.get("content")}
 
-        # Register main agent
         await sdk.register_agent(
             AgentConfig(topic="main.topic", callback=main_agent, name="main-agent")
         )
 
-        # Register reply agent
         await sdk.register_agent(
             AgentConfig(topic="reply.topic", callback=reply_agent, name="reply-agent")
         )
 
-        # Don't start - just test publishing
-        # Publish task with reply_to
         event = EventEnvelope(
             topic="main.topic",
             payload=PayloadBase(
@@ -298,8 +266,6 @@ class TestEndToEndWorkflows:
         )
         task_id = await sdk.publish_task(event)
 
-        # With fakeredis, actual processing may not work
-        # Just verify task was published
         assert task_id is not None
 
         await sdk.shutdown()
@@ -324,8 +290,6 @@ class TestEndToEndWorkflows:
             )
         )
 
-        # Don't start - just test publishing
-        # Publish task with correlation_id
         correlation_id = "corr-123-456"
         event = EventEnvelope(
             topic="correlation.topic",
@@ -334,8 +298,6 @@ class TestEndToEndWorkflows:
         )
         task_id = await sdk.publish_task(event)
 
-        # With fakeredis, actual processing may not work
-        # Just verify task was published with correlation_id
         assert task_id is not None
 
         await sdk.shutdown()
@@ -361,8 +323,6 @@ class TestEndToEndWorkflows:
             )
         )
 
-        # Don't start - just test publishing
-        # Publish tasks for different tenants
         event1 = EventEnvelope(
             topic="tenant.topic",
             payload=PayloadBase(content=json.dumps({"data": "tenant1"})),
@@ -377,8 +337,6 @@ class TestEndToEndWorkflows:
         task_id1 = await sdk.publish_task(event1)
         task_id2 = await sdk.publish_task(event2)
 
-        # With fakeredis, actual processing may not work
-        # Just verify tasks were published
         assert task_id1 is not None
         assert task_id2 is not None
 

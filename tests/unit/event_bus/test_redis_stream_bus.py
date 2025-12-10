@@ -46,7 +46,6 @@ class TestRedisStreamEventBusInitialization:
     def test_redis_stream_bus_init_defaults(self):
         """Test initialization with default parameters."""
         bus = RedisStreamEventBus()
-        # Redis URL may have /0 appended by aioredis, so check it starts with expected value
         assert bus.redis_url.startswith("redis://localhost:6379")
         assert bus.default_maxlen == 10_000
         assert bus.reclaim_interval == 30
@@ -117,10 +116,8 @@ class TestRedisStreamEventBusConnection:
             "omnidaemon.event_bus.redis_stream_bus.aioredis.from_url",
             return_value=mock_redis,
         ):
-            # Call connect multiple times concurrently
             await asyncio.gather(bus.connect(), bus.connect(), bus.connect())
 
-            # Should only create one connection
             assert bus._redis is not None
 
     @pytest.mark.asyncio
@@ -139,7 +136,6 @@ class TestRedisStreamEventBusConnection:
             await bus.connect()
             second_redis = bus._redis
 
-            # Should be the same instance
             assert first_redis is second_redis
 
     @pytest.mark.asyncio
@@ -205,7 +201,6 @@ class TestRedisStreamEventBusConnection:
 
         await bus.close()
 
-        # Wait a bit for cancellation to propagate
         await asyncio.sleep(0.01)
 
         assert task1.cancelled()
@@ -229,7 +224,6 @@ class TestRedisStreamEventBusConnection:
 
         await bus.close()
 
-        # Wait a bit for cancellation to propagate
         await asyncio.sleep(0.01)
 
         assert task1.cancelled()
@@ -259,7 +253,6 @@ class TestRedisStreamEventBusConnection:
         await bus.close()
         await bus.close()
 
-        # Should not raise any errors
         assert bus._redis is None
 
 
@@ -342,7 +335,6 @@ class TestRedisStreamEventBusPublish:
 
         await bus.publish(event_payload)
 
-        # xadd with mkstream=True creates stream automatically
         mock_redis.xadd.assert_called_once()
 
     @pytest.mark.asyncio
@@ -392,13 +384,9 @@ class TestRedisStreamEventBusPublish:
         await bus.publish(event_payload)
 
         mock_redis.xadd.assert_called_once()
-        # Verify the payload includes all fields
-        # xadd is called as xadd(stream_name, {"data": payload}, maxlen=..., approximate=...)
-        # So data is in the second positional argument (index 0, then index 1)
         call_args = mock_redis.xadd.call_args
-        data_dict = call_args[0][1]  # Second positional argument
+        data_dict = call_args[0][1]
         assert "data" in data_dict
-        # Verify the data contains all expected fields
         import json
 
         data = json.loads(data_dict["data"])
@@ -419,7 +407,6 @@ class TestRedisStreamEventBusPublish:
         event_payload = {
             "id": "task-123",
             "payload": {"content": "test"},
-            # Missing topic
         }
 
         with pytest.raises(
@@ -456,17 +443,13 @@ class TestRedisStreamEventBusPublish:
 
         await bus.publish(event_payload)
 
-        # Verify xadd was called with serialized data
-        # xadd is called as xadd(stream_name, {"data": payload}, maxlen=..., approximate=...)
         call_args = mock_redis.xadd.call_args
-        data_dict = call_args[0][1]  # Second positional argument
+        data_dict = call_args[0][1]
         assert "data" in data_dict
-        # Data should be a JSON string
         import json
 
         data_str = data_dict["data"]
         assert isinstance(data_str, str)
-        # Should be valid JSON
         json.loads(data_str)
 
 
@@ -491,7 +474,6 @@ class TestRedisStreamEventBusSubscribe:
         assert "group:test.topic:test-agent" in bus._consumers
         mock_redis.xgroup_create.assert_called_once()
 
-        # Cleanup: cancel tasks and stop running
         await cleanup_bus_tasks(bus, "group:test.topic:test-agent")
 
     @pytest.mark.asyncio
@@ -515,7 +497,6 @@ class TestRedisStreamEventBusSubscribe:
 
             assert bus._redis is not None
 
-            # Cleanup
             await cleanup_bus_tasks(bus, "group:test.topic:test-agent")
 
     @pytest.mark.asyncio
@@ -539,7 +520,6 @@ class TestRedisStreamEventBusSubscribe:
         assert call_args[0][1] == "group:test.topic:test-agent"
         assert call_args[1]["mkstream"] is True
 
-        # Cleanup
         await cleanup_bus_tasks(bus, "group:test.topic:test-agent")
 
     @pytest.mark.asyncio
@@ -548,7 +528,6 @@ class TestRedisStreamEventBusSubscribe:
         bus = RedisStreamEventBus(redis_url="redis://localhost:6379")
         mock_redis = AsyncMock()
 
-        # Simulate BUSYGROUP error (group already exists)
         from redis.exceptions import ResponseError
 
         mock_redis.xgroup_create = AsyncMock(side_effect=ResponseError("BUSYGROUP"))
@@ -557,15 +536,12 @@ class TestRedisStreamEventBusSubscribe:
         async def callback(msg):
             pass
 
-        # Should not raise error
         await bus.subscribe(
             topic="test.topic", agent_name="test-agent", callback=callback
         )
 
-        # Should still create consumer entry
         assert "group:test.topic:test-agent" in bus._consumers
 
-        # Cleanup
         await cleanup_bus_tasks(bus, "group:test.topic:test-agent")
 
     @pytest.mark.asyncio
@@ -574,7 +550,6 @@ class TestRedisStreamEventBusSubscribe:
         bus = RedisStreamEventBus(redis_url="redis://localhost:6379")
         mock_redis = AsyncMock()
 
-        # Simulate non-BUSYGROUP error
         from redis.exceptions import ResponseError
 
         mock_redis.xgroup_create = AsyncMock(side_effect=ResponseError("OTHER_ERROR"))
@@ -583,7 +558,6 @@ class TestRedisStreamEventBusSubscribe:
         async def callback(msg):
             pass
 
-        # Should raise the error
         with pytest.raises(ResponseError, match="OTHER_ERROR"):
             await bus.subscribe(
                 topic="test.topic", agent_name="test-agent", callback=callback
@@ -611,7 +585,6 @@ class TestRedisStreamEventBusSubscribe:
         assert len(consumer_meta["consume_tasks"]) == 3
         assert len(consumer_meta["reclaim_tasks"]) == 3
 
-        # Cleanup
         await cleanup_bus_tasks(bus, "group:test.topic:test-agent")
 
     @pytest.mark.asyncio
@@ -637,7 +610,6 @@ class TestRedisStreamEventBusSubscribe:
             "omni-stream:test.topic", "custom-group", id="$", mkstream=True
         )
 
-        # Cleanup
         await cleanup_bus_tasks(bus, "custom-group")
 
     @pytest.mark.asyncio
@@ -659,10 +631,8 @@ class TestRedisStreamEventBusSubscribe:
         )
 
         consumer_meta = bus._consumers["group:test.topic:test-agent"]
-        # Check that consumer name is used in tasks
         assert consumer_meta is not None
 
-        # Cleanup
         await cleanup_bus_tasks(bus, "group:test.topic:test-agent")
 
     @pytest.mark.asyncio
@@ -686,7 +656,6 @@ class TestRedisStreamEventBusSubscribe:
         consumer_meta = bus._consumers["group:test.topic:test-agent"]
         assert consumer_meta["config"]["reclaim_idle_ms"] == 300_000
 
-        # Cleanup
         await cleanup_bus_tasks(bus, "group:test.topic:test-agent")
 
     @pytest.mark.asyncio
@@ -710,7 +679,6 @@ class TestRedisStreamEventBusSubscribe:
         consumer_meta = bus._consumers["group:test.topic:test-agent"]
         assert consumer_meta["config"]["dlq_retry_limit"] == 5
 
-        # Cleanup
         await cleanup_bus_tasks(bus, "group:test.topic:test-agent")
 
     @pytest.mark.asyncio
@@ -730,7 +698,6 @@ class TestRedisStreamEventBusSubscribe:
 
         assert "group:test.topic:test-agent" in bus._consumers
 
-        # Cleanup
         await cleanup_bus_tasks(bus, "group:test.topic:test-agent")
 
     @pytest.mark.asyncio
@@ -750,7 +717,6 @@ class TestRedisStreamEventBusSubscribe:
 
         assert "group:test.topic:test-agent" in bus._consumers
 
-        # Cleanup
         await cleanup_bus_tasks(bus, "group:test.topic:test-agent")
 
     @pytest.mark.asyncio
@@ -775,7 +741,6 @@ class TestRedisStreamEventBusSubscribe:
         assert consumer_meta["group"] == "group:test.topic:test-agent"
         assert consumer_meta["dlq"] == "omni-dlq:group:test.topic:test-agent"
 
-        # Cleanup
         await cleanup_bus_tasks(bus, "group:test.topic:test-agent")
 
     @pytest.mark.asyncio
@@ -795,13 +760,11 @@ class TestRedisStreamEventBusSubscribe:
             topic="test.topic", agent_name="test-agent", callback=callback
         )
 
-        # Verify store.save_config was called with correct key and value
         mock_store.save_config.assert_called_once()
         call_args = mock_store.save_config.call_args
         assert call_args[0][0] == "_subscription_active:group:test.topic:test-agent"
         assert call_args[0][1] is True
 
-        # Cleanup
         await cleanup_bus_tasks(bus, "group:test.topic:test-agent")
 
     @pytest.mark.asyncio
@@ -824,13 +787,11 @@ class TestRedisStreamEventBusSubscribe:
             group_name="custom-group",
         )
 
-        # Verify store.save_config was called with custom group name
         mock_store.save_config.assert_called_once()
         call_args = mock_store.save_config.call_args
         assert call_args[0][0] == "_subscription_active:custom-group"
         assert call_args[0][1] is True
 
-        # Cleanup
         await cleanup_bus_tasks(bus, "custom-group")
 
     @pytest.mark.asyncio
@@ -846,15 +807,12 @@ class TestRedisStreamEventBusSubscribe:
         async def callback(msg):
             pass
 
-        # Should not raise exception, subscription should still succeed
         await bus.subscribe(
             topic="test.topic", agent_name="test-agent", callback=callback
         )
 
-        # Subscription should still be created
         assert "group:test.topic:test-agent" in bus._consumers
 
-        # Cleanup
         await cleanup_bus_tasks(bus, "group:test.topic:test-agent")
 
     @pytest.mark.asyncio
@@ -868,20 +826,17 @@ class TestRedisStreamEventBusSubscribe:
         async def callback(msg):
             pass
 
-        # Should work without store
         await bus.subscribe(
             topic="test.topic", agent_name="test-agent", callback=callback
         )
 
         assert "group:test.topic:test-agent" in bus._consumers
 
-        # Cleanup
         await cleanup_bus_tasks(bus, "group:test.topic:test-agent")
 
     @pytest.mark.asyncio
     async def test_subscribe_integration_with_json_store(self):
         """Integration test: verify subscription storage works with real JSONStore."""
-        # Create temporary directory for JSON store
         temp_dir = tempfile.mkdtemp()
         try:
             json_store = JSONStore(storage_dir=temp_dir)
@@ -900,30 +855,24 @@ class TestRedisStreamEventBusSubscribe:
             group_name = "group:test.topic:test-agent"
             subscription_key = f"_subscription_active:{group_name}"
 
-            # Verify subscription is not active initially
             is_active = await json_store.get_config(subscription_key, default=False)
             assert is_active is False
 
-            # Subscribe
             await bus.subscribe(
                 topic="test.topic", agent_name="test-agent", callback=callback
             )
 
-            # Verify subscription is now stored as active
             is_active = await json_store.get_config(subscription_key, default=False)
             assert is_active is True
 
-            # Cleanup
             await cleanup_bus_tasks(bus, group_name)
             await json_store.close()
         finally:
-            # Clean up temporary directory
             shutil.rmtree(temp_dir, ignore_errors=True)
 
     @pytest.mark.asyncio
     async def test_unsubscribe_integration_with_json_store(self):
         """Integration test: verify unsubscribe marks subscription inactive with real JSONStore."""
-        # Create temporary directory for JSON store
         temp_dir = tempfile.mkdtemp()
         try:
             json_store = JSONStore(storage_dir=temp_dir)
@@ -938,24 +887,19 @@ class TestRedisStreamEventBusSubscribe:
             group_name = "group:test.topic:test-agent"
             subscription_key = f"_subscription_active:{group_name}"
 
-            # Set subscription as active initially
             await json_store.save_config(subscription_key, True)
             is_active = await json_store.get_config(subscription_key, default=False)
             assert is_active is True
 
-            # Add consumer to bus
             bus._consumers[group_name] = {"consume_tasks": [], "reclaim_tasks": []}
 
-            # Unsubscribe
             await bus.unsubscribe("test.topic", "test-agent")
 
-            # Verify subscription is now marked as inactive
             is_active = await json_store.get_config(subscription_key, default=False)
             assert is_active is False
 
             await json_store.close()
         finally:
-            # Clean up temporary directory
             shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -970,7 +914,6 @@ class TestRedisStreamEventBusConsumeLoop:
         bus._redis = mock_redis
         bus._running = True
 
-        # Use an event to coordinate stopping the bus after message is processed
         message_processed = asyncio.Event()
         callback_called = []
 
@@ -986,23 +929,23 @@ class TestRedisStreamEventBusConsumeLoop:
                         [("1234567890-0", {"data": '{"content": "test"}'})],
                     )
                 ]
-            # Second call - return empty and stop
             bus._running = False
             return []
 
-        # Stop bus after callback processes message
         async def callback_with_stop(msg):
             callback_called.append(msg)
-            # Give a tiny bit of time for processing, then stop
             await asyncio.sleep(0.01)
             bus._running = False
             message_processed.set()
 
         mock_redis.xreadgroup = AsyncMock(side_effect=xreadgroup_side_effect)
         mock_redis.xack = AsyncMock()
-        mock_redis.xadd = AsyncMock()  # For monitor emit
+        mock_redis.xadd = AsyncMock()
 
-        # Run consume loop briefly
+        bus._group_semaphores["group:test.topic:test-agent"] = asyncio.Semaphore(10)
+
+        bus._group_semaphores["group:test.topic:test-agent"] = asyncio.Semaphore(10)
+
         consume_task = asyncio.create_task(
             bus._consume_loop(
                 stream_name="omni-stream:test.topic",
@@ -1013,13 +956,11 @@ class TestRedisStreamEventBusConsumeLoop:
             )
         )
 
-        # Wait for message to be processed
         try:
             await asyncio.wait_for(message_processed.wait(), timeout=0.5)
         except asyncio.TimeoutError:
             pass
 
-        # Wait for loop to exit (should be quick since _running is False)
         try:
             await asyncio.wait_for(consume_task, timeout=0.5)
         except (asyncio.TimeoutError, asyncio.CancelledError):
@@ -1030,7 +971,6 @@ class TestRedisStreamEventBusConsumeLoop:
             except asyncio.CancelledError:
                 pass
 
-        # Verify callback was called
         assert len(callback_called) > 0
 
     @pytest.mark.asyncio
@@ -1068,6 +1008,8 @@ class TestRedisStreamEventBusConsumeLoop:
         mock_redis.xreadgroup = AsyncMock(side_effect=xreadgroup_side_effect)
         mock_redis.xack = AsyncMock()
         mock_redis.xadd = AsyncMock()
+
+        bus._group_semaphores["group:test.topic:test-agent"] = asyncio.Semaphore(10)
 
         consume_task = asyncio.create_task(
             bus._consume_loop(
@@ -1131,6 +1073,8 @@ class TestRedisStreamEventBusConsumeLoop:
         mock_redis.xack = AsyncMock()
         mock_redis.xadd = AsyncMock()
 
+        bus._group_semaphores["group:test.topic:test-agent"] = asyncio.Semaphore(10)
+
         consume_task = asyncio.create_task(
             bus._consume_loop(
                 stream_name="omni-stream:test.topic",
@@ -1146,7 +1090,6 @@ class TestRedisStreamEventBusConsumeLoop:
         except asyncio.TimeoutError:
             pass
 
-        # Verify xack was called
         mock_redis.xack.assert_called()
 
         try:
@@ -1186,7 +1129,6 @@ class TestRedisStreamEventBusConsumeLoop:
 
         async def callback_with_stop(msg):
             raise ValueError("Callback error")
-            # This won't execute, but set flag anyway
             bus._running = False
             message_processed.set()
 
@@ -1203,7 +1145,6 @@ class TestRedisStreamEventBusConsumeLoop:
             )
         )
 
-        # Wait a bit for error to be handled, then stop
         await asyncio.sleep(0.05)
         bus._running = False
 
@@ -1216,9 +1157,6 @@ class TestRedisStreamEventBusConsumeLoop:
                 await consume_task
             except asyncio.CancelledError:
                 pass
-
-        # Message should not be ACKed on error
-        # (it will remain in pending for reclaim)
 
     @pytest.mark.asyncio
     async def test_consume_loop_tracks_in_flight(self):
@@ -1249,18 +1187,19 @@ class TestRedisStreamEventBusConsumeLoop:
         in_flight_checked = asyncio.Event()
 
         async def callback_with_stop(msg):
-            # Check in-flight tracking while processing (before it's removed)
             group = "group:test.topic:test-agent"
             assert group in bus._in_flight
             assert msg_id in bus._in_flight[group]
             in_flight_checked.set()
-            await asyncio.sleep(0.02)  # Simulate processing time
+            await asyncio.sleep(0.02)
             bus._running = False
             message_processed.set()
 
         mock_redis.xreadgroup = AsyncMock(side_effect=xreadgroup_side_effect)
         mock_redis.xack = AsyncMock()
         mock_redis.xadd = AsyncMock()
+
+        bus._group_semaphores["group:test.topic:test-agent"] = asyncio.Semaphore(10)
 
         group = "group:test.topic:test-agent"
         consume_task = asyncio.create_task(
@@ -1273,13 +1212,11 @@ class TestRedisStreamEventBusConsumeLoop:
             )
         )
 
-        # Wait for in-flight check to happen
         try:
             await asyncio.wait_for(in_flight_checked.wait(), timeout=0.5)
         except asyncio.TimeoutError:
             pass
 
-        # Verify in-flight was checked during callback
         assert in_flight_checked.is_set()
 
         try:
@@ -1332,6 +1269,8 @@ class TestRedisStreamEventBusConsumeLoop:
         mock_redis.xack = AsyncMock()
         mock_redis.xadd = AsyncMock()
 
+        bus._group_semaphores["group:test.topic:test-agent"] = asyncio.Semaphore(10)
+
         group = "group:test.topic:test-agent"
         consume_task = asyncio.create_task(
             bus._consume_loop(
@@ -1348,10 +1287,8 @@ class TestRedisStreamEventBusConsumeLoop:
         except asyncio.TimeoutError:
             pass
 
-        # Wait a bit more for cleanup
         await asyncio.sleep(0.05)
 
-        # In-flight should be cleaned up after processing
         if group in bus._in_flight:
             assert msg_id not in bus._in_flight[group]
 
@@ -1401,6 +1338,8 @@ class TestRedisStreamEventBusConsumeLoop:
         mock_redis.xack = AsyncMock()
         mock_redis.xadd = AsyncMock()
 
+        bus._group_semaphores["group:test.topic:test-agent"] = asyncio.Semaphore(10)
+
         consume_task = asyncio.create_task(
             bus._consume_loop(
                 stream_name="omni-stream:test.topic",
@@ -1416,7 +1355,6 @@ class TestRedisStreamEventBusConsumeLoop:
         except asyncio.TimeoutError:
             pass
 
-        # Should handle invalid JSON gracefully
         assert len(received_messages) > 0
         assert "raw" in received_messages[0]
 
@@ -1455,7 +1393,6 @@ class TestRedisStreamEventBusConsumeLoop:
             )
         )
 
-        # Wait for loop to detect connection error and exit
         try:
             await asyncio.wait_for(consume_task, timeout=1.0)
         except (asyncio.TimeoutError, asyncio.CancelledError):
@@ -1465,7 +1402,6 @@ class TestRedisStreamEventBusConsumeLoop:
             except asyncio.CancelledError:
                 pass
 
-        # Should exit gracefully on connection error
         assert consume_task.done()
 
     @pytest.mark.asyncio
@@ -1476,14 +1412,12 @@ class TestRedisStreamEventBusConsumeLoop:
         bus._redis = mock_redis
         bus._running = True
 
-        # Make xreadgroup return empty and stop after first call
         call_count = 0
 
         async def xreadgroup_side_effect(*args, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                # After first empty result, stop the bus so loop exits
                 await asyncio.sleep(0.01)
                 bus._running = False
             return []
@@ -1503,7 +1437,6 @@ class TestRedisStreamEventBusConsumeLoop:
             )
         )
 
-        # Wait for loop to process and exit
         try:
             await asyncio.wait_for(consume_task, timeout=0.5)
         except (asyncio.TimeoutError, asyncio.CancelledError):
@@ -1514,8 +1447,6 @@ class TestRedisStreamEventBusConsumeLoop:
             except asyncio.CancelledError:
                 pass
 
-        # Should handle cancellation without errors
-        # Note: task might complete normally if _running was set, or be cancelled
         assert consume_task.done()
 
     @pytest.mark.asyncio
@@ -1550,7 +1481,9 @@ class TestRedisStreamEventBusConsumeLoop:
 
         mock_redis.xreadgroup = AsyncMock(side_effect=xreadgroup_side_effect)
         mock_redis.xack = AsyncMock()
-        mock_redis.xadd = AsyncMock()  # For monitor emit
+        mock_redis.xadd = AsyncMock()
+
+        bus._group_semaphores["group:test.topic:test-agent"] = asyncio.Semaphore(10)
 
         consume_task = asyncio.create_task(
             bus._consume_loop(
@@ -1567,7 +1500,6 @@ class TestRedisStreamEventBusConsumeLoop:
         except asyncio.TimeoutError:
             pass
 
-        # Verify monitor events were emitted
         assert mock_redis.xadd.called
 
         try:
@@ -1588,14 +1520,12 @@ class TestRedisStreamEventBusConsumeLoop:
         bus._redis = mock_redis
         bus._running = True
 
-        # Make xreadgroup return empty and stop after first call
         call_count = 0
 
         async def xreadgroup_side_effect(*args, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                # After first empty result, stop the bus so loop exits
                 await asyncio.sleep(0.01)
                 bus._running = False
             return []
@@ -1615,7 +1545,6 @@ class TestRedisStreamEventBusConsumeLoop:
             )
         )
 
-        # Wait for loop to process and exit
         try:
             await asyncio.wait_for(consume_task, timeout=0.5)
         except (asyncio.TimeoutError, asyncio.CancelledError):
@@ -1626,14 +1555,13 @@ class TestRedisStreamEventBusConsumeLoop:
             except asyncio.CancelledError:
                 pass
 
-        # Should handle empty results (timeout) gracefully
         assert mock_redis.xreadgroup.called
 
     @pytest.mark.asyncio
     async def test_consume_loop_checks_subscription_active_with_store(self):
         """Test consume loop checks subscription active status from store."""
         mock_store = AsyncMock()
-        mock_store.get_config = AsyncMock(return_value=True)  # Subscription is active
+        mock_store.get_config = AsyncMock(return_value=True)
         bus = RedisStreamEventBus(redis_url="redis://localhost:6379", store=mock_store)
         mock_redis = AsyncMock()
         bus._redis = mock_redis
@@ -1673,7 +1601,6 @@ class TestRedisStreamEventBusConsumeLoop:
             )
         )
 
-        # Wait for loop to process
         await asyncio.sleep(0.1)
         bus._running = False
 
@@ -1686,26 +1613,23 @@ class TestRedisStreamEventBusConsumeLoop:
             except asyncio.CancelledError:
                 pass
 
-        # Verify store.get_config was called to check subscription status
         assert mock_store.get_config.called
         call_args = mock_store.get_config.call_args
         assert call_args[0][0] == "_subscription_active:group:test.topic:test-agent"
-        # default=False is a keyword argument, not positional
         assert call_args[1]["default"] is False
 
     @pytest.mark.asyncio
     async def test_consume_loop_stops_when_subscription_inactive(self):
         """Test consume loop stops when subscription is marked inactive."""
         mock_store = AsyncMock()
-        # First call returns True (active), second call returns False (inactive)
         call_count = 0
 
         async def get_config_side_effect(key, default):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return True  # Active initially
-            return False  # Inactive on second check
+                return True
+            return False
 
         mock_store.get_config = AsyncMock(side_effect=get_config_side_effect)
         bus = RedisStreamEventBus(redis_url="redis://localhost:6379", store=mock_store)
@@ -1714,7 +1638,6 @@ class TestRedisStreamEventBusConsumeLoop:
         bus._running = True
 
         async def xreadgroup_side_effect(*args, **kwargs):
-            # Return empty to allow loop to check subscription status
             await asyncio.sleep(0.01)
             return []
 
@@ -1734,7 +1657,6 @@ class TestRedisStreamEventBusConsumeLoop:
             )
         )
 
-        # Wait for loop to check subscription status and exit
         try:
             await asyncio.wait_for(consume_task, timeout=1.0)
         except (asyncio.TimeoutError, asyncio.CancelledError):
@@ -1745,7 +1667,6 @@ class TestRedisStreamEventBusConsumeLoop:
             except asyncio.CancelledError:
                 pass
 
-        # Loop should have exited when subscription became inactive
         assert consume_task.done()
 
     @pytest.mark.asyncio
@@ -1791,7 +1712,6 @@ class TestRedisStreamEventBusConsumeLoop:
             )
         )
 
-        # Wait for loop to process
         await asyncio.sleep(0.1)
         bus._running = False
 
@@ -1804,7 +1724,6 @@ class TestRedisStreamEventBusConsumeLoop:
             except asyncio.CancelledError:
                 pass
 
-        # Should continue processing despite store error
         assert mock_redis.xreadgroup.called
 
     @pytest.mark.asyncio
@@ -1848,7 +1767,6 @@ class TestRedisStreamEventBusConsumeLoop:
             )
         )
 
-        # Wait for loop to process
         await asyncio.sleep(0.1)
         bus._running = False
 
@@ -1861,14 +1779,13 @@ class TestRedisStreamEventBusConsumeLoop:
             except asyncio.CancelledError:
                 pass
 
-        # Should work without store
         assert mock_redis.xreadgroup.called
 
     @pytest.mark.asyncio
     async def test_consume_loop_auto_connects_if_not_connected(self):
         """Test consume loop auto-connects if Redis not connected."""
         bus = RedisStreamEventBus(redis_url="redis://localhost:6379")
-        bus._redis = None  # Not connected
+        bus._redis = None
         bus._running = True
 
         call_count = 0
@@ -1877,7 +1794,6 @@ class TestRedisStreamEventBusConsumeLoop:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                # After first call, stop the bus so loop exits
                 await asyncio.sleep(0.01)
                 bus._running = False
             return []
@@ -1913,7 +1829,6 @@ class TestRedisStreamEventBusConsumeLoop:
                 except asyncio.CancelledError:
                     pass
 
-            # Should have connected
             assert bus._redis is not None
 
     @pytest.mark.asyncio
@@ -1948,7 +1863,6 @@ class TestRedisStreamEventBusConsumeLoop:
             except asyncio.CancelledError:
                 pass
 
-        # Should handle cancellation gracefully
         assert consume_task.done()
 
     @pytest.mark.asyncio
@@ -1959,7 +1873,10 @@ class TestRedisStreamEventBusConsumeLoop:
         bus._redis = mock_redis
         bus._running = True
 
-        mock_redis.xreadgroup = AsyncMock(side_effect=Exception("NOGROUP error"))
+        async def raise_nogroup(*args, **kwargs):
+            raise Exception("NOGROUP error")
+
+        mock_redis.xreadgroup = AsyncMock(side_effect=raise_nogroup)
 
         async def callback(msg):
             pass
@@ -1983,7 +1900,6 @@ class TestRedisStreamEventBusConsumeLoop:
             except asyncio.CancelledError:
                 pass
 
-        # Should exit on NOGROUP error
         assert consume_task.done()
 
     @pytest.mark.asyncio
@@ -2029,7 +1945,6 @@ class TestRedisStreamEventBusConsumeLoop:
             except asyncio.CancelledError:
                 pass
 
-        # Should handle error and continue
         assert mock_redis.xreadgroup.called
 
     @pytest.mark.asyncio
@@ -2065,6 +1980,8 @@ class TestRedisStreamEventBusConsumeLoop:
         mock_redis.xack = AsyncMock()
         mock_redis.xadd = AsyncMock()
 
+        bus._group_semaphores["group:test.topic:test-agent"] = asyncio.Semaphore(10)
+
         consume_task = asyncio.create_task(
             bus._consume_loop(
                 stream_name="omni-stream:test.topic",
@@ -2091,13 +2008,11 @@ class TestRedisStreamEventBusConsumeLoop:
             except asyncio.CancelledError:
                 pass
 
-        # Sync callback should have been called
         assert callback_called.is_set()
 
     @pytest.mark.asyncio
     async def test_consume_loop_integration_with_json_store(self):
         """Integration test: verify consume loop checks subscription status from real JSONStore."""
-        # Create temporary directory for JSON store
         temp_dir = tempfile.mkdtemp()
         try:
             json_store = JSONStore(storage_dir=temp_dir)
@@ -2113,7 +2028,6 @@ class TestRedisStreamEventBusConsumeLoop:
             group_name = "group:test.topic:test-agent"
             subscription_key = f"_subscription_active:{group_name}"
 
-            # Set subscription as active initially
             await json_store.save_config(subscription_key, True)
 
             call_count = 0
@@ -2122,7 +2036,6 @@ class TestRedisStreamEventBusConsumeLoop:
                 nonlocal call_count
                 call_count += 1
                 if call_count == 1:
-                    # After first call, mark subscription as inactive
                     await json_store.save_config(subscription_key, False)
                     return []
                 return []
@@ -2142,7 +2055,6 @@ class TestRedisStreamEventBusConsumeLoop:
                 )
             )
 
-            # Wait for loop to check subscription status and exit
             try:
                 await asyncio.wait_for(consume_task, timeout=1.0)
             except (asyncio.TimeoutError, asyncio.CancelledError):
@@ -2153,12 +2065,10 @@ class TestRedisStreamEventBusConsumeLoop:
                 except asyncio.CancelledError:
                     pass
 
-            # Loop should have exited when subscription became inactive
             assert consume_task.done()
 
             await json_store.close()
         finally:
-            # Clean up temporary directory
             shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -2175,14 +2085,12 @@ class TestRedisStreamEventBusReclaimLoop:
         bus._redis = mock_redis
         bus._running = True
 
-        # Mock pending messages - return once, then stop immediately
         call_count = 0
 
         async def xpending_side_effect(*args, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                # Stop immediately after first call to prevent sleep
                 await asyncio.sleep(0.01)
                 bus._running = False
                 return [{"message_id": "1234567890-0", "time_since_delivered": 200000}]
@@ -2216,7 +2124,6 @@ class TestRedisStreamEventBusReclaimLoop:
             except asyncio.CancelledError:
                 pass
 
-        # Verify xpending_range was called
         mock_redis.xpending_range.assert_called()
 
     @pytest.mark.asyncio
@@ -2274,7 +2181,6 @@ class TestRedisStreamEventBusReclaimLoop:
         except asyncio.TimeoutError:
             pass
 
-        # Verify xclaim was called
         mock_redis.xclaim.assert_called()
 
         try:
@@ -2297,21 +2203,19 @@ class TestRedisStreamEventBusReclaimLoop:
         bus._redis = mock_redis
         bus._running = True
 
-        # Message with idle time less than threshold
         call_count = 0
 
         async def xpending_side_effect(*args, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                # Stop immediately after first call
                 await asyncio.sleep(0.01)
                 bus._running = False
                 return [
                     {
                         "message_id": "1234567890-0",
                         "time_since_delivered": 100000,
-                    }  # Less than 180000
+                    }
                 ]
             return []
 
@@ -2342,7 +2246,6 @@ class TestRedisStreamEventBusReclaimLoop:
             except asyncio.CancelledError:
                 pass
 
-        # Should not claim messages below threshold
         mock_redis.xclaim.assert_not_called()
 
     @pytest.mark.asyncio
@@ -2381,7 +2284,7 @@ class TestRedisStreamEventBusReclaimLoop:
                 (msg_id, {"data": '{"content": "test", "delivery_attempts": 0}'})
             ]
         )
-        mock_redis.hincrby = AsyncMock(return_value=1)  # First retry
+        mock_redis.hincrby = AsyncMock(return_value=1)
         mock_redis.expire = AsyncMock()
         mock_redis.xack = AsyncMock()
         mock_redis.hdel = AsyncMock()
@@ -2404,7 +2307,6 @@ class TestRedisStreamEventBusReclaimLoop:
         except asyncio.TimeoutError:
             pass
 
-        # Verify callback was called for retry
         assert len(callback_called) > 0
 
         try:
@@ -2451,7 +2353,7 @@ class TestRedisStreamEventBusReclaimLoop:
                 (msg_id, {"data": '{"content": "test", "delivery_attempts": 0}'})
             ]
         )
-        mock_redis.hincrby = AsyncMock(return_value=2)  # Retry count = 2
+        mock_redis.hincrby = AsyncMock(return_value=2)
         mock_redis.expire = AsyncMock()
         mock_redis.xack = AsyncMock()
         mock_redis.hdel = AsyncMock()
@@ -2474,7 +2376,6 @@ class TestRedisStreamEventBusReclaimLoop:
         except asyncio.TimeoutError:
             pass
 
-        # Verify retry count was incremented
         mock_redis.hincrby.assert_called()
 
         try:
@@ -2521,12 +2422,11 @@ class TestRedisStreamEventBusReclaimLoop:
                 (msg_id, {"data": '{"content": "test", "delivery_attempts": 0}'})
             ]
         )
-        # Retry count exceeds limit (4 > 3)
         mock_redis.hincrby = AsyncMock(return_value=4)
         mock_redis.expire = AsyncMock()
         mock_redis.xack = AsyncMock()
         mock_redis.hdel = AsyncMock()
-        mock_redis.xadd = AsyncMock()  # For DLQ
+        mock_redis.xadd = AsyncMock()
 
         reclaim_task = asyncio.create_task(
             bus._reclaim_loop(
@@ -2545,7 +2445,6 @@ class TestRedisStreamEventBusReclaimLoop:
         except asyncio.TimeoutError:
             pass
 
-        # Verify message was sent to DLQ (xadd called for DLQ)
         assert mock_redis.xadd.called
 
         try:
@@ -2592,7 +2491,7 @@ class TestRedisStreamEventBusReclaimLoop:
                 (msg_id, {"data": '{"content": "test", "delivery_attempts": 0}'})
             ]
         )
-        mock_redis.hincrby = AsyncMock(return_value=4)  # Exceeds limit
+        mock_redis.hincrby = AsyncMock(return_value=4)
         mock_redis.expire = AsyncMock()
         mock_redis.xack = AsyncMock()
         mock_redis.hdel = AsyncMock()
@@ -2615,7 +2514,6 @@ class TestRedisStreamEventBusReclaimLoop:
         except asyncio.TimeoutError:
             pass
 
-        # Verify xack was called after sending to DLQ
         mock_redis.xack.assert_called()
 
         try:
@@ -2641,7 +2539,6 @@ class TestRedisStreamEventBusReclaimLoop:
         msg_id = "1234567890-0"
         group = "group:test.topic:test-agent"
 
-        # Mark message as in-flight
         bus._in_flight[group] = {msg_id}
 
         call_count = 0
@@ -2650,7 +2547,6 @@ class TestRedisStreamEventBusReclaimLoop:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                # Stop immediately after first call
                 await asyncio.sleep(0.01)
                 bus._running = False
                 return [{"message_id": msg_id, "time_since_delivered": 200000}]
@@ -2683,7 +2579,6 @@ class TestRedisStreamEventBusReclaimLoop:
             except asyncio.CancelledError:
                 pass
 
-        # Should not claim in-flight messages
         mock_redis.xclaim.assert_not_called()
 
     @pytest.mark.asyncio
@@ -2696,7 +2591,6 @@ class TestRedisStreamEventBusReclaimLoop:
         bus._redis = mock_redis
         bus._running = True
 
-        # First call raises error, subsequent calls return empty and stop
         call_count = 0
 
         async def xpending_side_effect(*args, **kwargs):
@@ -2704,7 +2598,6 @@ class TestRedisStreamEventBusReclaimLoop:
             call_count += 1
             if call_count == 1:
                 raise Exception("xpending unavailable")
-            # After error handling sleep, stop the bus
             await asyncio.sleep(0.01)
             bus._running = False
             return []
@@ -2726,7 +2619,6 @@ class TestRedisStreamEventBusReclaimLoop:
             )
         )
 
-        # Wait for error handling and then exit
         try:
             await asyncio.wait_for(reclaim_task, timeout=2.0)
         except (asyncio.TimeoutError, asyncio.CancelledError):
@@ -2736,8 +2628,6 @@ class TestRedisStreamEventBusReclaimLoop:
                 await reclaim_task
             except asyncio.CancelledError:
                 pass
-
-        # Should handle error gracefully and continue
 
     @pytest.mark.asyncio
     async def test_reclaim_loop_handles_connection_closed(self):
@@ -2766,7 +2656,6 @@ class TestRedisStreamEventBusReclaimLoop:
             )
         )
 
-        # Wait for loop to detect connection error and exit
         try:
             await asyncio.wait_for(reclaim_task, timeout=1.0)
         except (asyncio.TimeoutError, asyncio.CancelledError):
@@ -2776,7 +2665,6 @@ class TestRedisStreamEventBusReclaimLoop:
             except asyncio.CancelledError:
                 pass
 
-        # Should exit gracefully on connection error
         assert reclaim_task.done()
 
     @pytest.mark.asyncio
@@ -2789,9 +2677,8 @@ class TestRedisStreamEventBusReclaimLoop:
         bus._redis = mock_redis
         bus._running = True
 
-        # Make xpending_range block to allow cancellation
         async def xpending_side_effect(*args, **kwargs):
-            await asyncio.sleep(10)  # Block for a long time
+            await asyncio.sleep(10)
             return []
 
         mock_redis.xpending_range = AsyncMock(side_effect=xpending_side_effect)
@@ -2811,10 +2698,8 @@ class TestRedisStreamEventBusReclaimLoop:
             )
         )
 
-        # Wait a bit for the loop to start
         await asyncio.sleep(0.05)
 
-        # Cancel the task while it's running (don't set _running = False yet)
         reclaim_task.cancel()
 
         try:
@@ -2822,9 +2707,6 @@ class TestRedisStreamEventBusReclaimLoop:
         except asyncio.CancelledError:
             pass
 
-        # Should handle cancellation gracefully
-        # The task may complete normally if _running was checked before cancellation,
-        # so check if it's done (either cancelled or completed)
         assert reclaim_task.done()
 
     @pytest.mark.asyncio
@@ -2863,7 +2745,7 @@ class TestRedisStreamEventBusReclaimLoop:
         mock_redis.expire = AsyncMock()
         mock_redis.xack = AsyncMock()
         mock_redis.hdel = AsyncMock()
-        mock_redis.xadd = AsyncMock()  # For monitor emit
+        mock_redis.xadd = AsyncMock()
 
         reclaim_task = asyncio.create_task(
             bus._reclaim_loop(
@@ -2882,7 +2764,6 @@ class TestRedisStreamEventBusReclaimLoop:
         except asyncio.TimeoutError:
             pass
 
-        # Verify monitor events were emitted
         assert mock_redis.xadd.called
 
         try:
@@ -2899,7 +2780,7 @@ class TestRedisStreamEventBusReclaimLoop:
     async def test_reclaim_loop_checks_subscription_active_with_store(self):
         """Test reclaim loop checks subscription active status from store."""
         mock_store = AsyncMock()
-        mock_store.get_config = AsyncMock(return_value=True)  # Subscription is active
+        mock_store.get_config = AsyncMock(return_value=True)
         bus = RedisStreamEventBus(
             redis_url="redis://localhost:6379",
             store=mock_store,
@@ -2938,7 +2819,6 @@ class TestRedisStreamEventBusReclaimLoop:
             )
         )
 
-        # Wait for loop to process
         try:
             await asyncio.wait_for(reclaim_task, timeout=1.0)
         except (asyncio.TimeoutError, asyncio.CancelledError):
@@ -2949,46 +2829,35 @@ class TestRedisStreamEventBusReclaimLoop:
             except asyncio.CancelledError:
                 pass
 
-        # Verify store.get_config was called to check subscription status
         assert mock_store.get_config.called
         call_args = mock_store.get_config.call_args
         assert call_args[0][0] == "_subscription_active:group:test.topic:test-agent"
-        # default=False is a keyword argument, not positional
         assert call_args[1]["default"] is False
 
     @pytest.mark.asyncio
     async def test_reclaim_loop_stops_when_subscription_inactive(self):
         """Test reclaim loop stops when subscription is marked inactive (lines 464-467)."""
         mock_store = AsyncMock()
-        # First call returns True (active), second call returns False (inactive)
         call_count = 0
 
         async def get_config_side_effect(key, default):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return True  # Active initially
-            # On second check, return False to trigger the break at line 467
-            return False  # Inactive on second check
+                return True
+            return False
 
         mock_store.get_config = AsyncMock(side_effect=get_config_side_effect)
         bus = RedisStreamEventBus(
             redis_url="redis://localhost:6379",
             store=mock_store,
-            reclaim_interval=0.1,  # Shorter interval to ensure multiple iterations
+            reclaim_interval=0.1,
         )
         mock_redis = AsyncMock()
         bus._redis = mock_redis
         bus._running = True
 
-        # The loop checks subscription status at the start of each iteration
-        # We need to ensure it runs at least 2 iterations:
-        # - First iteration: subscription active, loop continues
-        # - Second iteration: subscription inactive, loop breaks at line 467
-
         async def xpending_side_effect(*args, **kwargs):
-            # Always return empty to allow loop to continue to next iteration
-            # The loop will sleep (reclaim_interval=0.1) and check subscription again
             return []
 
         async def callback(msg):
@@ -3009,12 +2878,8 @@ class TestRedisStreamEventBusReclaimLoop:
             )
         )
 
-        # Wait for loop to run at least 2 iterations
-        # First iteration: checks subscription (active), processes empty pending, sleeps 0.1s
-        # Second iteration: checks subscription (inactive), breaks at line 467
-        await asyncio.sleep(0.15)  # Wait for at least 2 iterations (0.1s interval)
+        await asyncio.sleep(0.15)
 
-        # Wait for loop to exit
         try:
             await asyncio.wait_for(reclaim_task, timeout=1.0)
         except (asyncio.TimeoutError, asyncio.CancelledError):
@@ -3025,10 +2890,7 @@ class TestRedisStreamEventBusReclaimLoop:
             except asyncio.CancelledError:
                 pass
 
-        # Loop should have exited when subscription became inactive (lines 464-467)
         assert reclaim_task.done()
-        # Verify get_config was called at least twice (once active, once inactive to trigger break)
-        # The loop checks subscription at the start of each iteration, so we need at least 2 iterations
         assert mock_store.get_config.call_count >= 2
 
     @pytest.mark.asyncio
@@ -3073,7 +2935,6 @@ class TestRedisStreamEventBusReclaimLoop:
             )
         )
 
-        # Wait for loop to process
         try:
             await asyncio.wait_for(reclaim_task, timeout=1.0)
         except (asyncio.TimeoutError, asyncio.CancelledError):
@@ -3084,7 +2945,6 @@ class TestRedisStreamEventBusReclaimLoop:
             except asyncio.CancelledError:
                 pass
 
-        # Should continue processing despite store error
         assert mock_redis.xpending_range.called
 
     @pytest.mark.asyncio
@@ -3125,7 +2985,6 @@ class TestRedisStreamEventBusReclaimLoop:
             )
         )
 
-        # Wait for loop to process
         try:
             await asyncio.wait_for(reclaim_task, timeout=1.0)
         except (asyncio.TimeoutError, asyncio.CancelledError):
@@ -3136,7 +2995,6 @@ class TestRedisStreamEventBusReclaimLoop:
             except asyncio.CancelledError:
                 pass
 
-        # Should work without store
         assert mock_redis.xpending_range.called
 
     @pytest.mark.asyncio
@@ -3145,7 +3003,7 @@ class TestRedisStreamEventBusReclaimLoop:
         bus = RedisStreamEventBus(
             redis_url="redis://localhost:6379", reclaim_interval=1
         )
-        bus._redis = None  # Not connected
+        bus._redis = None
         bus._running = True
 
         call_count = 0
@@ -3154,7 +3012,6 @@ class TestRedisStreamEventBusReclaimLoop:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                # After first call, stop the bus so loop exits
                 await asyncio.sleep(0.01)
                 bus._running = False
             return []
@@ -3192,7 +3049,6 @@ class TestRedisStreamEventBusReclaimLoop:
                 except asyncio.CancelledError:
                     pass
 
-            # Should have connected
             assert bus._redis is not None
 
     @pytest.mark.asyncio
@@ -3205,7 +3061,6 @@ class TestRedisStreamEventBusReclaimLoop:
         bus._redis = mock_redis
         bus._running = True
 
-        # Return invalid entry format (not dict, tuple, or list)
         call_count = 0
 
         async def xpending_side_effect(*args, **kwargs):
@@ -3214,7 +3069,7 @@ class TestRedisStreamEventBusReclaimLoop:
             if call_count == 1:
                 await asyncio.sleep(0.01)
                 bus._running = False
-                return ["invalid_entry"]  # Invalid format
+                return ["invalid_entry"]
             return []
 
         mock_redis.xpending_range = AsyncMock(side_effect=xpending_side_effect)
@@ -3244,7 +3099,6 @@ class TestRedisStreamEventBusReclaimLoop:
             except asyncio.CancelledError:
                 pass
 
-        # Should handle invalid format gracefully
         assert mock_redis.xpending_range.called
 
     @pytest.mark.asyncio
@@ -3268,7 +3122,6 @@ class TestRedisStreamEventBusReclaimLoop:
             bus._running = False
             return []
 
-        # Return message with invalid JSON
         mock_redis.xpending_range = AsyncMock(side_effect=xpending_side_effect)
         mock_redis.xclaim = AsyncMock(
             return_value=[(msg_id, {"data": "invalid json{"})]
@@ -3277,7 +3130,6 @@ class TestRedisStreamEventBusReclaimLoop:
         mock_redis.expire = AsyncMock()
 
         async def callback(msg):
-            # Should receive payload with raw data
             assert "raw" in msg
 
         reclaim_task = asyncio.create_task(
@@ -3304,7 +3156,6 @@ class TestRedisStreamEventBusReclaimLoop:
             except asyncio.CancelledError:
                 pass
 
-        # Should handle JSON error gracefully
         assert mock_redis.xclaim.called
 
     @pytest.mark.asyncio
@@ -3335,7 +3186,6 @@ class TestRedisStreamEventBusReclaimLoop:
             return []
 
         mock_redis.xpending_range = AsyncMock(side_effect=xpending_side_effect)
-        # Include delivery_attempts in the payload to avoid KeyError when incrementing
         mock_redis.xclaim = AsyncMock(
             return_value=[
                 (msg_id, {"data": '{"content": "test", "delivery_attempts": 0}'})
@@ -3375,7 +3225,6 @@ class TestRedisStreamEventBusReclaimLoop:
             except asyncio.CancelledError:
                 pass
 
-        # Sync callback should have been called
         assert callback_called.is_set()
 
     @pytest.mark.asyncio
@@ -3394,7 +3243,6 @@ class TestRedisStreamEventBusReclaimLoop:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                # Return entry that will cause processing error
                 await asyncio.sleep(0.01)
                 bus._running = False
                 return [{"message_id": None, "time_since_delivered": 200000}]
@@ -3427,7 +3275,6 @@ class TestRedisStreamEventBusReclaimLoop:
             except asyncio.CancelledError:
                 pass
 
-        # Should handle processing error gracefully
         assert mock_redis.xpending_range.called
 
     @pytest.mark.asyncio
@@ -3447,7 +3294,6 @@ class TestRedisStreamEventBusReclaimLoop:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                # Return tuple format: (msg_id, consumer_name, idle_time, delivery_count)
                 return [(msg_id, "consumer-1", 200000, 1)]
             bus._running = False
             return []
@@ -3481,7 +3327,6 @@ class TestRedisStreamEventBusReclaimLoop:
             except asyncio.CancelledError:
                 pass
 
-        # Should handle tuple format
         assert mock_redis.xpending_range.called
 
     @pytest.mark.asyncio
@@ -3501,12 +3346,10 @@ class TestRedisStreamEventBusReclaimLoop:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                # Return entry that will cause exception during processing
                 return [{"message_id": msg_id, "time_since_delivered": 200000}]
             bus._running = False
             return []
 
-        # Make xclaim raise an exception to trigger the exception handler at line 605
         async def xclaim_side_effect(*args, **kwargs):
             raise Exception("XCLAIM processing failed")
 
@@ -3538,7 +3381,6 @@ class TestRedisStreamEventBusReclaimLoop:
             except asyncio.CancelledError:
                 pass
 
-        # Should handle exception gracefully (exception handler at line 605-606)
         assert mock_redis.xpending_range.called
 
     @pytest.mark.asyncio
@@ -3577,7 +3419,6 @@ class TestRedisStreamEventBusReclaimLoop:
             except asyncio.CancelledError:
                 pass
 
-        # Should exit on NOGROUP error
         assert reclaim_task.done()
 
     @pytest.mark.asyncio
@@ -3596,9 +3437,7 @@ class TestRedisStreamEventBusReclaimLoop:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                # Raise generic exception (not NOGROUP, not connection error)
                 raise Exception("Generic processing error")
-            # After exception handling, stop the loop
             await asyncio.sleep(0.01)
             bus._running = False
             return []
@@ -3630,7 +3469,6 @@ class TestRedisStreamEventBusReclaimLoop:
             except asyncio.CancelledError:
                 pass
 
-        # Should handle error and continue (lines 615-630 exception handling)
         assert mock_redis.xpending_range.called
 
     @pytest.mark.asyncio
@@ -3671,7 +3509,6 @@ class TestRedisStreamEventBusReclaimLoop:
             except asyncio.CancelledError:
                 pass
 
-        # Should exit on connection closed error (lines 623-627)
         assert reclaim_task.done()
 
     @pytest.mark.asyncio
@@ -3710,13 +3547,11 @@ class TestRedisStreamEventBusReclaimLoop:
             except asyncio.CancelledError:
                 pass
 
-        # Should exit on connection reset error (lines 623-627)
         assert reclaim_task.done()
 
     @pytest.mark.asyncio
     async def test_reclaim_loop_integration_with_json_store(self):
         """Integration test: verify reclaim loop checks subscription status from real JSONStore."""
-        # Create temporary directory for JSON store
         temp_dir = tempfile.mkdtemp()
         try:
             json_store = JSONStore(storage_dir=temp_dir)
@@ -3734,7 +3569,6 @@ class TestRedisStreamEventBusReclaimLoop:
             group_name = "group:test.topic:test-agent"
             subscription_key = f"_subscription_active:{group_name}"
 
-            # Set subscription as active initially
             await json_store.save_config(subscription_key, True)
 
             call_count = 0
@@ -3743,7 +3577,6 @@ class TestRedisStreamEventBusReclaimLoop:
                 nonlocal call_count
                 call_count += 1
                 if call_count == 1:
-                    # After first call, mark subscription as inactive
                     await json_store.save_config(subscription_key, False)
                     await asyncio.sleep(0.01)
                     return []
@@ -3766,7 +3599,6 @@ class TestRedisStreamEventBusReclaimLoop:
                 )
             )
 
-            # Wait for loop to check subscription status and exit
             try:
                 await asyncio.wait_for(reclaim_task, timeout=1.0)
             except (asyncio.TimeoutError, asyncio.CancelledError):
@@ -3777,12 +3609,10 @@ class TestRedisStreamEventBusReclaimLoop:
                 except asyncio.CancelledError:
                     pass
 
-            # Loop should have exited when subscription became inactive
             assert reclaim_task.done()
 
             await json_store.close()
         finally:
-            # Clean up temporary directory
             shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -3911,7 +3741,6 @@ class TestRedisStreamEventBusDLQ:
         mock_redis.xadd = AsyncMock(side_effect=Exception("Redis write failed"))
         bus._redis = mock_redis
 
-        # Should not raise exception
         await bus._send_to_dlq(
             group="group:test.topic:test-agent",
             stream_name="omni-stream:test.topic",
@@ -3921,16 +3750,14 @@ class TestRedisStreamEventBusDLQ:
             retry_count=3,
         )
 
-        # Verify xadd was called (even though it failed)
         mock_redis.xadd.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_send_to_dlq_handles_redis_not_connected(self):
         """Test send_to_dlq handles Redis not connected."""
         bus = RedisStreamEventBus(redis_url="redis://localhost:6379")
-        bus._redis = None  # Not connected
+        bus._redis = None
 
-        # Should not raise exception
         await bus._send_to_dlq(
             group="group:test.topic:test-agent",
             stream_name="omni-stream:test.topic",
@@ -3939,8 +3766,6 @@ class TestRedisStreamEventBusDLQ:
             error="Error",
             retry_count=3,
         )
-
-        # Should return early without error
 
 
 class TestRedisStreamEventBusUnsubscribe:
@@ -3966,7 +3791,7 @@ class TestRedisStreamEventBusUnsubscribe:
 
         await bus.unsubscribe("test.topic", "test-agent")
 
-        await asyncio.sleep(0.01)  # Wait for cancellation
+        await asyncio.sleep(0.01)
 
         assert task1.cancelled()
         assert task2.cancelled()
@@ -4081,10 +3906,8 @@ class TestRedisStreamEventBusUnsubscribe:
         mock_redis = AsyncMock()
         bus._redis = mock_redis
 
-        # Should not raise exception
         await bus.unsubscribe("test.topic", "nonexistent-agent")
 
-        # Should not call any Redis operations
         mock_redis.xgroup_destroy.assert_not_called()
         mock_redis.delete.assert_not_called()
 
@@ -4099,7 +3922,6 @@ class TestRedisStreamEventBusUnsubscribe:
         group_name = "group:test.topic:test-agent"
         bus._consumers[group_name] = {"consume_tasks": [], "reclaim_tasks": []}
 
-        # Should not raise exception
         await bus.unsubscribe("test.topic", "test-agent", delete_group=True)
 
         mock_redis.xgroup_destroy.assert_called_once()
@@ -4118,7 +3940,6 @@ class TestRedisStreamEventBusUnsubscribe:
 
         await bus.unsubscribe("test.topic", "test-agent")
 
-        # Verify store.save_config was called with False to mark as inactive
         mock_store.save_config.assert_called_once()
         call_args = mock_store.save_config.call_args
         assert call_args[0][0] == "_subscription_active:group:test.topic:test-agent"
@@ -4136,10 +3957,8 @@ class TestRedisStreamEventBusUnsubscribe:
         group_name = "group:test.topic:test-agent"
         bus._consumers[group_name] = {"consume_tasks": [], "reclaim_tasks": []}
 
-        # Should not raise exception
         await bus.unsubscribe("test.topic", "test-agent")
 
-        # Should still remove from consumers
         assert group_name not in bus._consumers
 
     @pytest.mark.asyncio
@@ -4152,7 +3971,6 @@ class TestRedisStreamEventBusUnsubscribe:
         group_name = "group:test.topic:test-agent"
         bus._consumers[group_name] = {"consume_tasks": [], "reclaim_tasks": []}
 
-        # Should work without store
         await bus.unsubscribe("test.topic", "test-agent")
 
         assert group_name not in bus._consumers
@@ -4166,11 +3984,10 @@ class TestRedisStreamEventBusUnsubscribe:
 
         group_name = "group:test.topic:test-agent"
         bus._consumers[group_name] = {
-            "consume_tasks": [],  # Empty list
-            "reclaim_tasks": [],  # Empty list
+            "consume_tasks": [],
+            "reclaim_tasks": [],
         }
 
-        # Should not raise error
         await bus.unsubscribe("test.topic", "test-agent")
 
         assert group_name not in bus._consumers
@@ -4184,12 +4001,10 @@ class TestRedisStreamEventBusUnsubscribe:
 
         group_name = "group:test.topic:test-agent"
         bus._consumers[group_name] = {
-            # Missing consume_tasks and reclaim_tasks keys
             "topic": "test.topic",
             "agent_name": "test-agent",
         }
 
-        # Should not raise error
         await bus.unsubscribe("test.topic", "test-agent")
 
         assert group_name not in bus._consumers
@@ -4201,13 +4016,11 @@ class TestRedisStreamEventBusUnsubscribe:
         mock_redis = AsyncMock()
         bus._redis = mock_redis
 
-        # Create and immediately cancel a task
         task1 = asyncio.create_task(asyncio.sleep(100))
         task2 = asyncio.create_task(asyncio.sleep(100))
         task1.cancel()
         task2.cancel()
 
-        # Wait a bit for cancellation to propagate
         await asyncio.sleep(0.01)
 
         group_name = "group:test.topic:test-agent"
@@ -4216,11 +4029,9 @@ class TestRedisStreamEventBusUnsubscribe:
             "reclaim_tasks": [task2],
         }
 
-        # Should not raise error when canceling already-cancelled tasks
         await bus.unsubscribe("test.topic", "test-agent")
 
         assert group_name not in bus._consumers
-        # Tasks should be cancelled or in cancelling state
         assert task1.cancelled() or task1.cancelling()
         assert task2.cancelled() or task2.cancelling()
 
@@ -4231,13 +4042,12 @@ class TestRedisStreamEventBusUnsubscribe:
         mock_redis = AsyncMock()
         bus._redis = mock_redis
 
-        # Create tasks that complete immediately
         async def quick_task():
             return "done"
 
         task1 = asyncio.create_task(quick_task())
         task2 = asyncio.create_task(quick_task())
-        await asyncio.sleep(0.01)  # Let tasks complete
+        await asyncio.sleep(0.01)
 
         group_name = "group:test.topic:test-agent"
         bus._consumers[group_name] = {
@@ -4245,7 +4055,6 @@ class TestRedisStreamEventBusUnsubscribe:
             "reclaim_tasks": [task2],
         }
 
-        # Should not raise error when canceling already-done tasks
         await bus.unsubscribe("test.topic", "test-agent")
 
         assert group_name not in bus._consumers
@@ -4256,7 +4065,7 @@ class TestRedisStreamEventBusUnsubscribe:
     async def test_unsubscribe_auto_connects_if_not_connected(self):
         """Test unsubscribe auto-connects if Redis not connected."""
         bus = RedisStreamEventBus(redis_url="redis://localhost:6379")
-        bus._redis = None  # Not connected
+        bus._redis = None
 
         mock_redis = AsyncMock()
         with patch(
@@ -4268,7 +4077,6 @@ class TestRedisStreamEventBusUnsubscribe:
 
             await bus.unsubscribe("test.topic", "test-agent")
 
-            # Should have connected
             assert bus._redis is not None
 
     @pytest.mark.asyncio
@@ -4282,7 +4090,6 @@ class TestRedisStreamEventBusUnsubscribe:
         group_name = "group:test.topic:test-agent"
         bus._consumers[group_name] = {"consume_tasks": [], "reclaim_tasks": []}
 
-        # Should not raise exception, but should log error
         await bus.unsubscribe("test.topic", "test-agent", delete_group=True)
 
         mock_redis.xgroup_destroy.assert_called_once()
@@ -4298,7 +4105,6 @@ class TestRedisStreamEventBusUnsubscribe:
         group_name = "group:test.topic:test-agent"
         bus._consumers[group_name] = {"consume_tasks": [], "reclaim_tasks": []}
 
-        # Should not raise exception
         await bus.unsubscribe("test.topic", "test-agent", delete_dlq=True)
 
         mock_redis.delete.assert_called_once()
@@ -4335,31 +4141,21 @@ class TestRedisStreamEventBusGetConsumers:
         mock_redis = AsyncMock()
         bus._redis = mock_redis
 
-        # Ensure _consumers is empty so it discovers from Redis
         bus._consumers = {}
 
-        # Mock scan to return stream keys
         mock_redis.scan = AsyncMock(
             side_effect=[
                 (0, [b"omni-stream:test.topic"]),
             ]
         )
 
-        # Mock xinfo_groups to return group info
-        # The code logic:
-        #   consumers_count = group_info.get(b"consumers", 0) if isinstance(group_info.get(b"consumers"), bytes)
-        #   else group_info.get("consumers", 0)
-        # Since b"consumers" exists but is not bytes (it's int 2), it goes to else branch
-        # which looks for "consumers" (string key). So we need to provide string keys.
-        # Actually, Redis returns bytes for field names but the values can be int or bytes.
-        # Let's provide the values as the code expects - use string keys for the else branch.
         mock_redis.xinfo_groups = AsyncMock(
             return_value=[
                 {
                     b"name": b"group:test.topic:test-agent",
-                    "name": "group:test.topic:test-agent",  # For the else branch
-                    "consumers": 2,  # String key for the else branch
-                    "pending": 5,  # String key for the else branch
+                    "name": "group:test.topic:test-agent",
+                    "consumers": 2,
+                    "pending": 5,
                 }
             ]
         )
@@ -4411,7 +4207,6 @@ class TestRedisStreamEventBusGetConsumers:
 
         mock_redis.scan = AsyncMock(side_effect=Exception("Scan failed"))
 
-        # Should return empty dict or existing consumers
         consumers = await bus.get_consumers()
 
         assert isinstance(consumers, dict)
@@ -4430,7 +4225,6 @@ class TestRedisStreamEventBusGetConsumers:
         )
         mock_redis.xinfo_groups = AsyncMock(side_effect=Exception("XINFO failed"))
 
-        # Should handle error gracefully
         consumers = await bus.get_consumers()
 
         assert isinstance(consumers, dict)
@@ -4439,7 +4233,7 @@ class TestRedisStreamEventBusGetConsumers:
     async def test_get_consumers_auto_connects_if_not_connected(self):
         """Test get_consumers auto-connects if Redis not connected."""
         bus = RedisStreamEventBus(redis_url="redis://localhost:6379")
-        bus._redis = None  # Not connected
+        bus._redis = None
 
         mock_redis = AsyncMock()
         mock_redis.scan = AsyncMock(return_value=(0, []))
@@ -4450,7 +4244,6 @@ class TestRedisStreamEventBusGetConsumers:
         ):
             consumers = await bus.get_consumers()
 
-            # Should have connected
             assert bus._redis is not None
             assert isinstance(consumers, dict)
 
@@ -4495,7 +4288,6 @@ class TestRedisStreamEventBusMonitorEmit:
 
         metric = {"topic": "test.topic", "event": "processed"}
 
-        # Should not raise exception
         await bus._emit_monitor(metric)
 
         mock_redis.xadd.assert_called_once()
@@ -4520,11 +4312,8 @@ class TestRedisStreamEventBusMonitorEmit:
     async def test_emit_monitor_handles_redis_not_connected(self):
         """Test emit_monitor handles Redis not connected."""
         bus = RedisStreamEventBus(redis_url="redis://localhost:6379")
-        bus._redis = None  # Not connected
+        bus._redis = None
 
         metric = {"topic": "test.topic", "event": "processed"}
 
-        # Should not raise exception
         await bus._emit_monitor(metric)
-
-        # Should return early without error

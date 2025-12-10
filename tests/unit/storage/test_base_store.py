@@ -106,7 +106,6 @@ class TestBaseStore:
         assert hasattr(BaseStore, "delete_topic")
         assert hasattr(BaseStore, "clear_agents")
 
-        # Verify they are abstract
         assert getattr(BaseStore.add_agent, "__isabstractmethod__", False)
         assert getattr(BaseStore.get_agent, "__isabstractmethod__", False)
         assert getattr(BaseStore.get_agents_by_topic, "__isabstractmethod__", False)
@@ -123,7 +122,6 @@ class TestBaseStore:
         assert hasattr(BaseStore, "list_results")
         assert hasattr(BaseStore, "clear_results")
 
-        # Verify they are abstract
         assert getattr(BaseStore.save_result, "__isabstractmethod__", False)
         assert getattr(BaseStore.get_result, "__isabstractmethod__", False)
         assert getattr(BaseStore.delete_result, "__isabstractmethod__", False)
@@ -136,7 +134,6 @@ class TestBaseStore:
         assert hasattr(BaseStore, "get_metrics")
         assert hasattr(BaseStore, "clear_metrics")
 
-        # Verify they are abstract
         assert getattr(BaseStore.save_metric, "__isabstractmethod__", False)
         assert getattr(BaseStore.get_metrics, "__isabstractmethod__", False)
         assert getattr(BaseStore.clear_metrics, "__isabstractmethod__", False)
@@ -146,19 +143,16 @@ class TestBaseStore:
         assert hasattr(BaseStore, "save_config")
         assert hasattr(BaseStore, "get_config")
 
-        # Verify they are abstract
         assert getattr(BaseStore.save_config, "__isabstractmethod__", False)
         assert getattr(BaseStore.get_config, "__isabstractmethod__", False)
 
     @pytest.mark.asyncio
     async def test_concrete_implementation_required(self):
         """Verify concrete implementations must implement all methods."""
-        # MockStore implements all methods, so it should work
         store = MockStore()
         await store.connect()
         await store.close()
 
-        # Verify all methods are callable
         await store.health_check()
         await store.add_agent("test", {"name": "test"})
         await store.get_agent("test", "test")
