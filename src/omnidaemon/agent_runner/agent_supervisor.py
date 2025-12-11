@@ -261,8 +261,15 @@ class AgentSupervisor:
                 await self._stderr_task
             except asyncio.CancelledError:
                 pass
+        if self._heartbeat_task:
+            self._heartbeat_task.cancel()
+            try:
+                await self._heartbeat_task
+            except asyncio.CancelledError:
+                pass
         self._stdout_task = None
         self._stderr_task = None
+        self._heartbeat_task = None
 
     async def handle_event(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
