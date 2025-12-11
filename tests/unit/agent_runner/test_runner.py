@@ -194,7 +194,6 @@ class TestBaseAgentRunnerRegisterHandler:
 
         await runner.register_handler("test.topic", subscription)
 
-        # Should save start time and runner_id
         assert mock_store.save_config.call_count == 2
         save_calls = [call[0][0] for call in mock_store.save_config.call_args_list]
         assert "_omnidaemon_start_time" in save_calls
@@ -223,7 +222,6 @@ class TestBaseAgentRunnerRegisterHandler:
 
         await runner.register_handler("test.topic", subscription)
 
-        # Check that runner_id was saved
         save_calls = mock_store.save_config.call_args_list
         runner_id_call = [
             call for call in save_calls if call[0][0] == "_omnidaemon_runner_id"
@@ -240,7 +238,7 @@ class TestBaseAgentRunnerRegisterHandler:
         mock_event_bus.subscribe = AsyncMock()
         mock_event_bus.connect = AsyncMock()
         mock_store.connect = AsyncMock()
-        mock_store.get_config = AsyncMock(return_value=time.time())  # Already started
+        mock_store.get_config = AsyncMock(return_value=time.time())
         mock_store.save_config = AsyncMock()
 
         runner = BaseAgentRunner(event_bus=mock_event_bus, store=mock_store)
@@ -368,7 +366,6 @@ class TestBaseAgentRunnerAgentCallbackWrapper:
 
         await wrapper(message)
 
-        # Check that task_received metric was saved
         metric_calls = mock_store.save_metric.call_args_list
         received_metrics = [
             call for call in metric_calls if call[0][0].get("event") == "task_received"
@@ -389,7 +386,7 @@ class TestBaseAgentRunnerAgentCallbackWrapper:
         runner = BaseAgentRunner(event_bus=mock_event_bus, store=mock_store)
 
         async def agent_callback(msg):
-            await asyncio.sleep(0.01)  # Simulate processing time
+            await asyncio.sleep(0.01)
             return "result"
 
         wrapper = await runner._make_agent_callback(
@@ -400,7 +397,6 @@ class TestBaseAgentRunnerAgentCallbackWrapper:
 
         await wrapper(message)
 
-        # Check that task_processed metric was saved
         metric_calls = mock_store.save_metric.call_args_list
         processed_metrics = [
             call for call in metric_calls if call[0][0].get("event") == "task_processed"
@@ -419,7 +415,7 @@ class TestBaseAgentRunnerAgentCallbackWrapper:
         runner = BaseAgentRunner(event_bus=mock_event_bus, store=mock_store)
 
         async def agent_callback(msg):
-            await asyncio.sleep(0.05)  # Simulate processing
+            await asyncio.sleep(0.05)
             return "result"
 
         wrapper = await runner._make_agent_callback(
@@ -430,7 +426,6 @@ class TestBaseAgentRunnerAgentCallbackWrapper:
 
         await wrapper(message)
 
-        # Check processing time was tracked
         metric_calls = mock_store.save_metric.call_args_list
         processed_metrics = [
             call for call in metric_calls if call[0][0].get("event") == "task_processed"
@@ -460,7 +455,6 @@ class TestBaseAgentRunnerAgentCallbackWrapper:
         with pytest.raises(ValueError):
             await wrapper(message)
 
-        # Check that task_failed metric was saved
         metric_calls = mock_store.save_metric.call_args_list
         failed_metrics = [
             call for call in metric_calls if call[0][0].get("event") == "task_failed"
@@ -490,8 +484,7 @@ class TestBaseAgentRunnerAgentCallbackWrapper:
 
         result = await wrapper(message)
 
-        # Should complete successfully
-        assert result is None  # Wrapper doesn't return, but callback executed
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_agent_wrapper_handles_sync_callback(self):
@@ -513,8 +506,6 @@ class TestBaseAgentRunnerAgentCallbackWrapper:
         message = {"task_id": "task-123", "content": "test"}
 
         await wrapper(message)
-
-        # Should complete successfully with sync callback
 
     @pytest.mark.asyncio
     async def test_agent_wrapper_adds_topic_to_message(self):
@@ -540,7 +531,6 @@ class TestBaseAgentRunnerAgentCallbackWrapper:
         message = {
             "task_id": "task-123",
             "content": "test",
-            # Missing topic
         }
 
         await wrapper(message)
@@ -597,7 +587,6 @@ class TestBaseAgentRunnerAgentCallbackWrapper:
         with pytest.raises(RuntimeError, match="Callback exception"):
             await wrapper(message)
 
-        # Should track failure
         metric_calls = mock_store.save_metric.call_args_list
         failed_metrics = [
             call for call in metric_calls if call[0][0].get("event") == "task_failed"
@@ -625,7 +614,6 @@ class TestBaseAgentRunnerAgentCallbackWrapper:
 
         await wrapper(message)
 
-        # Should save result
         mock_store.save_result.assert_called_once()
         call_args = mock_store.save_result.call_args
         assert call_args[1]["task_id"] == "task-123"
@@ -742,7 +730,7 @@ class TestBaseAgentRunnerSendResponse:
         await runner._send_response(message, result)
 
         call_args = mock_store.save_result.call_args
-        assert call_args[1]["ttl_seconds"] == 86400  # 24 hours
+        assert call_args[1]["ttl_seconds"] == 86400
 
     @pytest.mark.asyncio
     async def test_send_response_webhook_success(self):
@@ -760,23 +748,16 @@ class TestBaseAgentRunnerSendResponse:
         }
         result = "result"
 
-        # Create proper async context manager mocks
-        # session.post() returns a response object that is an async context manager
         mock_resp = AsyncMock()
         mock_resp.status = 200
-        # Make mock_resp an async context manager
         mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
         mock_resp.__aexit__ = AsyncMock(return_value=None)
 
-        # session.post() should return the response object directly (not a coroutine)
         mock_session_instance = AsyncMock()
-        mock_session_instance.post = MagicMock(
-            return_value=mock_resp
-        )  # Not AsyncMock, regular MagicMock
+        mock_session_instance.post = MagicMock(return_value=mock_resp)
         mock_session_instance.__aenter__ = AsyncMock(return_value=mock_session_instance)
         mock_session_instance.__aexit__ = AsyncMock(return_value=None)
 
-        # Make ClientSession return our mock instance when called
         mock_client_session_class = MagicMock(return_value=mock_session_instance)
 
         with patch(
@@ -785,7 +766,6 @@ class TestBaseAgentRunnerSendResponse:
         ):
             await runner._send_response(message, result)
 
-            # Should be called once and break out of retry loop
             mock_session_instance.post.assert_called_once()
             call_args = mock_session_instance.post.call_args
             assert call_args[0][0] == "https://example.com/webhook"
@@ -813,21 +793,17 @@ class TestBaseAgentRunnerSendResponse:
             call_count += 1
             if call_count < 2:
                 raise Exception("Network error")
-            # Success on second attempt
             mock_resp = AsyncMock()
             mock_resp.status = 200
             mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
             mock_resp.__aexit__ = AsyncMock(return_value=None)
             return mock_resp
 
-        # Create proper async context manager mocks
         mock_session_instance = AsyncMock()
-        # post() is not async, it returns the response object directly
         mock_session_instance.post = MagicMock(side_effect=post_side_effect)
         mock_session_instance.__aenter__ = AsyncMock(return_value=mock_session_instance)
         mock_session_instance.__aexit__ = AsyncMock(return_value=None)
 
-        # Make ClientSession return our mock instance when called
         mock_client_session_class = MagicMock(return_value=mock_session_instance)
 
         with (
@@ -836,10 +812,9 @@ class TestBaseAgentRunnerSendResponse:
                 mock_client_session_class,
             ),
             patch("asyncio.sleep", return_value=None),
-        ):  # Skip actual sleep in tests
+        ):
             await runner._send_response(message, result)
 
-            # Should retry (called more than once, but breaks on success)
             assert mock_session_instance.post.call_count >= 2
 
     @pytest.mark.asyncio
@@ -858,11 +833,8 @@ class TestBaseAgentRunnerSendResponse:
         }
         result = "result"
 
-        # Create proper async context manager mocks
         mock_session_instance = AsyncMock()
 
-        # post() is not async, it returns the response object directly
-        # But we want it to raise an exception when used in async with
         def post_side_effect(*args, **kwargs):
             raise Exception("Network error")
 
@@ -870,7 +842,6 @@ class TestBaseAgentRunnerSendResponse:
         mock_session_instance.__aenter__ = AsyncMock(return_value=mock_session_instance)
         mock_session_instance.__aexit__ = AsyncMock(return_value=None)
 
-        # Make ClientSession return our mock instance when called
         mock_client_session_class = MagicMock(return_value=mock_session_instance)
 
         with (
@@ -879,10 +850,9 @@ class TestBaseAgentRunnerSendResponse:
                 mock_client_session_class,
             ),
             patch("asyncio.sleep", return_value=None),
-        ):  # Skip actual sleep in tests
+        ):
             await runner._send_response(message, result)
 
-            # Should retry max 3 times (one for each attempt)
             assert mock_session_instance.post.call_count == 3
 
     @pytest.mark.asyncio
@@ -906,11 +876,8 @@ class TestBaseAgentRunnerSendResponse:
         async def tracked_sleep(delay):
             sleep_times.append(delay)
 
-        # Create proper async context manager mocks
         mock_session_instance = AsyncMock()
 
-        # post() is not async, it returns the response object directly
-        # But we want it to raise an exception when used in async with
         def post_side_effect(*args, **kwargs):
             raise Exception("Network error")
 
@@ -918,7 +885,6 @@ class TestBaseAgentRunnerSendResponse:
         mock_session_instance.__aenter__ = AsyncMock(return_value=mock_session_instance)
         mock_session_instance.__aexit__ = AsyncMock(return_value=None)
 
-        # Make ClientSession return our mock instance when called
         mock_client_session_class = MagicMock(return_value=mock_session_instance)
 
         with (
@@ -930,11 +896,9 @@ class TestBaseAgentRunnerSendResponse:
         ):
             await runner._send_response(message, result)
 
-            # Should have exponential backoff delays
-            # First retry: 2^1 = 2, second retry: 2^2 = 4
             assert len(sleep_times) == 2
-            assert sleep_times[0] == 2  # 2^1
-            assert sleep_times[1] == 4  # 2^2
+            assert sleep_times[0] == 2
+            assert sleep_times[1] == 4
 
     @pytest.mark.asyncio
     async def test_send_response_reply_to(self):
@@ -971,13 +935,11 @@ class TestBaseAgentRunnerSendResponse:
         message = {
             "task_id": "task-123",
             "content": "test",
-            # No webhook, no reply_to
         }
         result = "result"
 
         await runner._send_response(message, result)
 
-        # Should still save result
         mock_store.save_result.assert_called_once()
 
     @pytest.mark.asyncio
@@ -992,10 +954,8 @@ class TestBaseAgentRunnerSendResponse:
         message = {"task_id": "task-123", "content": "test"}
         result = "result"
 
-        # Should not raise, just log error
         await runner._send_response(message, result)
 
-        # Should continue processing even if storage fails
         mock_store.save_result.assert_called_once()
 
 
@@ -1106,10 +1066,7 @@ class TestBaseAgentRunnerPublishResponse:
 
         runner = BaseAgentRunner(event_bus=mock_event_bus, store=mock_store)
 
-        message = {
-            "task_id": "original-task-id"
-            # No reply_to
-        }
+        message = {"task_id": "original-task-id"}
         result = "response"
 
         new_task_id = await runner.publish_response(message, result)
@@ -1167,7 +1124,6 @@ class TestBaseAgentRunnerStartStop:
         await runner.start()
         assert runner._running is True
 
-        # Second call should not raise error
         await runner.start()
         assert runner._running is True
 
@@ -1200,7 +1156,6 @@ class TestBaseAgentRunnerStartStop:
 
         await runner.stop()
 
-        # Should clear start time and runner_id
         assert mock_store.save_config.call_count == 2
         save_calls = [call[0][0] for call in mock_store.save_config.call_args_list]
         assert "_omnidaemon_start_time" in save_calls
@@ -1236,7 +1191,6 @@ class TestBaseAgentRunnerStartStop:
         await runner.stop()
         await runner.stop()
 
-        # Should not raise errors
         assert runner._running is False
 
     @pytest.mark.asyncio
@@ -1250,10 +1204,8 @@ class TestBaseAgentRunnerStartStop:
         runner = BaseAgentRunner(event_bus=mock_event_bus, store=mock_store)
         runner._running = True
 
-        # Should not raise, just log warning
         await runner.stop()
 
-        # Should still close event bus
         mock_event_bus.close.assert_called_once()
         assert runner._running is False
 

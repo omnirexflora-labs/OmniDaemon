@@ -50,14 +50,16 @@ class RedisStreamEventBus:
 
     def __init__(
         self,
-        redis_url: str = config("REDIS_URL", default="redis://localhost:6379"),
+        redis_url: Optional[str] = None,
         default_maxlen: int = 10_000,
         reclaim_interval: int = 30,
         default_reclaim_idle_ms: int = 180_000,
         default_dlq_retry_limit: int = 3,
         store: Optional[BaseStore] = None,
     ) -> None:
-        self.redis_url = redis_url
+        self.redis_url = redis_url or config(
+            "REDIS_URL", default="redis://localhost:6379"
+        )
         self.default_maxlen = default_maxlen
         self.reclaim_interval = reclaim_interval
         self.default_reclaim_idle_ms = default_reclaim_idle_ms
@@ -70,6 +72,7 @@ class RedisStreamEventBus:
         self._consumers: Dict[str, Dict[str, Any]] = {}
         self._in_flight: Dict[str, set] = {}
         self._running = False
+        self._group_semaphores: Dict[str, asyncio.Semaphore] = {}
 
     async def connect(self) -> None:
         """
@@ -239,6 +242,14 @@ class RedisStreamEventBus:
                 logger.warning(f"Failed to mark subscription active in storage: {e}")
 
         self._running = True
+
+        semaphore_limit = consumer_count * 10
+        self._group_semaphores[group] = asyncio.Semaphore(semaphore_limit)
+        logger.info(
+            f"[RedisStreamBus] Semaphore for {group} set to {semaphore_limit} "
+            f"(consumer_count={consumer_count} * 10)"
+        )
+
         consume_tasks = []
         reclaim_tasks = []
         for i in range(consumer_count):
@@ -348,38 +359,23 @@ class RedisStreamEventBus:
                         continue
                     for _, msgs in entries:
                         for msg_id, fields in msgs:
-                            raw = fields.get("data")
-                            try:
-                                payload = json.loads(raw)
-                            except Exception:
-                                payload = {"raw": raw}
                             if group not in self._in_flight:
                                 self._in_flight[group] = set()
                             self._in_flight[group].add(msg_id)
-                            try:
-                                payload["processing_consumer"] = consumer
-                                if asyncio.iscoroutinefunction(callback):
-                                    await callback(payload)
-                                else:
-                                    loop = asyncio.get_running_loop()
-                                    await loop.run_in_executor(None, callback, payload)
-                                await self._redis.xack(stream_name, group, msg_id)
-                                await self._emit_monitor(
-                                    {
-                                        "topic": topic,
-                                        "event": "processed",
-                                        "msg_id": msg_id,
-                                        "group": group,
-                                        "consumer": consumer,
-                                        "timestamp": time.time(),
-                                    }
+
+                            await self._group_semaphores[group].acquire()
+
+                            asyncio.create_task(
+                                self._process_message(
+                                    stream_name,
+                                    topic,
+                                    group,
+                                    consumer,
+                                    msg_id,
+                                    fields,
+                                    callback,
                                 )
-                            except Exception as cb_err:
-                                logger.exception(
-                                    f"[RedisStreamBus] callback error topic={topic} id={msg_id}: {cb_err}"
-                                )
-                            finally:
-                                self._in_flight[group].discard(msg_id)
+                            )
 
                 except asyncio.CancelledError:
                     logger.info(
@@ -412,6 +408,60 @@ class RedisStreamEventBus:
                     meta["consume_tasks"] = [
                         t for t in meta["consume_tasks"] if not t.done()
                     ]
+
+    async def _process_message(
+        self,
+        stream_name: str,
+        topic: str,
+        group: str,
+        consumer: str,
+        msg_id: str,
+        fields: Dict[str, Any],
+        callback: Callable[[Dict[str, Any]], Any],
+    ) -> None:
+        """
+        Process a single message concurrently.
+        """
+        try:
+            raw = fields.get("data")
+            try:
+                if isinstance(raw, (str, bytes, bytearray)):
+                    payload = json.loads(raw)
+                else:
+                    payload = {"raw": raw}
+            except Exception:
+                payload = {"raw": raw}
+
+            payload["processing_consumer"] = consumer
+
+            if asyncio.iscoroutinefunction(callback):
+                await callback(payload)
+            else:
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, callback, payload)
+
+            if self._redis:
+                await self._redis.xack(stream_name, group, msg_id)
+
+            await self._emit_monitor(
+                {
+                    "topic": topic,
+                    "event": "processed",
+                    "msg_id": msg_id,
+                    "group": group,
+                    "consumer": consumer,
+                    "timestamp": time.time(),
+                }
+            )
+        except Exception as cb_err:
+            logger.exception(
+                f"[RedisStreamBus] callback error topic={topic} id={msg_id}: {cb_err}"
+            )
+        finally:
+            if group in self._group_semaphores:
+                self._group_semaphores[group].release()
+            if group in self._in_flight:
+                self._in_flight[group].discard(msg_id)
 
     async def _reclaim_loop(
         self,
@@ -541,8 +591,8 @@ class RedisStreamEventBus:
                             except Exception:
                                 payload = {"raw": raw}
 
-                            retry_count = await self._redis.hincrby(retry_key, _id, 1)  # type: ignore[misc]
-                            await self._redis.expire(retry_key, 3600)  # type: ignore[misc]
+                            retry_count = await self._redis.hincrby(retry_key, _id, 1)  # type: ignore
+                            await self._redis.expire(retry_key, 3600)
                             retry_count = int(retry_count)
 
                             if retry_count > dlq_retry_limit:
@@ -559,8 +609,8 @@ class RedisStreamEventBus:
                                     error=f"Max retries ({1 + dlq_retry_limit}) exceeded",
                                     retry_count=retry_count,
                                 )
-                                await self._redis.xack(stream_name, group, _id)  # type: ignore[misc]
-                                await self._redis.hdel(retry_key, _id)  # type: ignore[misc]
+                                await self._redis.xack(stream_name, group, _id)  # type: ignore
+                                await self._redis.hdel(retry_key, _id)  # type: ignore
                                 await self._emit_monitor(
                                     {
                                         "topic": topic,
@@ -585,8 +635,8 @@ class RedisStreamEventBus:
                                         await loop.run_in_executor(
                                             None, callback, payload
                                         )
-                                    await self._redis.xack(stream_name, group, _id)  # type: ignore[misc]
-                                    await self._redis.hdel(retry_key, _id)  # type: ignore[misc]
+                                    await self._redis.xack(stream_name, group, _id)  # type: ignore
+                                    await self._redis.hdel(retry_key, _id)  # type: ignore
                                     await self._emit_monitor(
                                         {
                                             "topic": topic,
@@ -771,7 +821,6 @@ class RedisStreamEventBus:
 
         if group_name in self._consumers:
             consumer_meta = self._consumers[group_name]
-            # Cancel all consume and reclaim tasks
             consume_tasks = consumer_meta.get("consume_tasks", [])
             reclaim_tasks = consumer_meta.get("reclaim_tasks", [])
             for task in consume_tasks + reclaim_tasks:
@@ -783,7 +832,7 @@ class RedisStreamEventBus:
 
         if delete_group:
             try:
-                await self._redis.xgroup_destroy(stream_name, group_name)  # type: ignore[misc]
+                await self._redis.xgroup_destroy(stream_name, group_name)
                 logger.info(f"[RedisStreamBus] Deleted consumer group {group_name}")
             except Exception as e:
                 error_str = str(e)
@@ -798,7 +847,7 @@ class RedisStreamEventBus:
 
         if delete_dlq:
             try:
-                await self._redis.delete(dlq_name)  # type: ignore[misc]
+                await self._redis.delete(dlq_name)
                 logger.info(f"[RedisStreamBus] Deleted DLQ {dlq_name}")
             except Exception as e:
                 logger.warning(f"Failed to delete DLQ {dlq_name}: {e}")
@@ -830,7 +879,20 @@ class RedisStreamEventBus:
         assert self._redis is not None
 
         if self._consumers:
-            return self._consumers
+            clean_consumers = {}
+            for group_name, meta in self._consumers.items():
+                clean_consumers[group_name] = {
+                    "topic": meta.get("topic"),
+                    "stream": meta.get("stream"),
+                    "agent_name": meta.get("agent_name"),
+                    "group": meta.get("group"),
+                    "dlq": meta.get("dlq"),
+                    "config": meta.get("config", {}),
+                    "consumers_count": meta.get("config", {}).get("consumer_count", 1),
+                    "pending_messages": 0,
+                    "source": "memory",
+                }
+            return clean_consumers
 
         discovered_consumers = {}
 

@@ -4,7 +4,6 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
 
-# Patch OmniDaemonSDK at module level before any imports
 _mock_sdk_patcher = None
 _mock_sdk_instance = None
 
@@ -13,8 +12,6 @@ def pytest_configure(config):
     """Configure pytest - patch SDK before any test imports."""
     global _mock_sdk_patcher, _mock_sdk_instance
 
-    # Check if CLI tests are being collected
-    # We'll patch in pytest_runtest_setup to avoid affecting SDK tests
     pass
 
 
@@ -33,9 +30,7 @@ def pytest_runtest_setup(item):
     is_cli_test = "cli" in str(item.nodeid)
 
     if is_cli_test:
-        # CLI test - ensure patch is active
         if _mock_sdk_patcher is None:
-            # Create mock SDK instance
             _mock_sdk_instance = MagicMock()
             _mock_sdk_instance.list_agents = AsyncMock(return_value={})
             _mock_sdk_instance.get_agent = AsyncMock(return_value=None)
@@ -70,15 +65,12 @@ def pytest_runtest_setup(item):
             _mock_sdk_instance.get_config = AsyncMock(return_value=None)
             _mock_sdk_instance.metrics = AsyncMock(return_value={})
 
-            # Patch the SDK class to return our mock
             _mock_sdk_patcher = patch(
                 "omnidaemon.sdk.OmniDaemonSDK", return_value=_mock_sdk_instance
             )
             _mock_sdk_patcher.start()
 
-        # The SDK instance will be patched by the mock_sdk fixture in test_main.py
     else:
-        # Non-CLI test - ensure patch is stopped
         if _mock_sdk_patcher is not None:
             _mock_sdk_patcher.stop()
             _mock_sdk_patcher = None
@@ -91,9 +83,7 @@ def pytest_runtest_teardown(item):
     is_cli_test = "cli" in str(item.nodeid)
 
     if not is_cli_test and _mock_sdk_patcher is None:
-        # Non-CLI test finished, patch was already stopped
         pass
-    # For CLI tests, keep patch active for next CLI test
 
 
 @pytest.fixture(scope="session")

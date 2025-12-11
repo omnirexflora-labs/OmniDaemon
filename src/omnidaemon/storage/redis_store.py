@@ -134,10 +134,10 @@ class RedisStore(BaseStore):
 
         try:
             start = time.time()
-            await self._redis.ping()  # type: ignore[misc]
-            latency = (time.time() - start) * 1000  # ms
+            await self._redis.ping()  # type: ignore
+            latency = (time.time() - start) * 1000
 
-            info = await self._redis.info()  # type: ignore[misc]
+            info = await self._redis.info()
 
             return {
                 "status": "healthy",
@@ -191,9 +191,9 @@ class RedisStore(BaseStore):
         }
 
         async with self._redis.pipeline(transaction=True) as pipe:
-            await pipe.hset(agent_key, mapping=agent_flat)  # type: ignore[misc]
-            await pipe.sadd(self._key("agents", "topic", topic), agent_name)  # type: ignore[misc]
-            await pipe.sadd(self._key("topics"), topic)  # type: ignore[misc]
+            await pipe.hset(agent_key, mapping=agent_flat)  # type: ignore
+            await pipe.sadd(self._key("agents", "topic", topic), agent_name)  # type: ignore
+            await pipe.sadd(self._key("topics"), topic)  # type: ignore
             await pipe.execute()
 
     async def get_agent(self, topic: str, agent_name: str) -> Optional[Dict[str, Any]]:
@@ -212,7 +212,7 @@ class RedisStore(BaseStore):
         assert self._redis is not None
 
         agent_key = self._key("agent", topic, agent_name)
-        data = await self._redis.hgetall(agent_key)  # type: ignore[misc]
+        data = await self._redis.hgetall(agent_key)  # type: ignore
 
         if not data:
             return None
@@ -238,9 +238,9 @@ class RedisStore(BaseStore):
         """
         if not self._redis:
             await self.connect()
-        assert self._redis is not None  # Type narrowing after connect
+        assert self._redis is not None
 
-        agent_names = await self._redis.smembers(self._key("agents", "topic", topic))  # type: ignore[misc]
+        agent_names = await self._redis.smembers(self._key("agents", "topic", topic))  # type: ignore
 
         if not agent_names:
             return []
@@ -262,9 +262,9 @@ class RedisStore(BaseStore):
         """
         if not self._redis:
             await self.connect()
-        assert self._redis is not None  # Type narrowing after connect
+        assert self._redis is not None
 
-        topics = await self._redis.smembers(self._key("topics"))  # type: ignore[misc]
+        topics = await self._redis.smembers(self._key("topics"))  # type: ignore
 
         if not topics:
             return {}
@@ -281,19 +281,19 @@ class RedisStore(BaseStore):
         """Delete a specific agent."""
         if not self._redis:
             await self.connect()
-        assert self._redis is not None  # Type narrowing after connect
+        assert self._redis is not None
 
         agent_key = self._key("agent", topic, agent_name)
 
         async with self._redis.pipeline(transaction=True) as pipe:
-            await pipe.delete(agent_key)  # type: ignore[misc]
-            await pipe.srem(self._key("agents", "topic", topic), agent_name)  # type: ignore[misc]
+            await pipe.delete(agent_key)
+            await pipe.srem(self._key("agents", "topic", topic), agent_name)  # type: ignore
             results = await pipe.execute()
 
-        count = await self._redis.scard(self._key("agents", "topic", topic))  # type: ignore[misc]
+        count = await self._redis.scard(self._key("agents", "topic", topic))  # type: ignore
         if count == 0:
-            await self._redis.srem(self._key("topics"), topic)  # type: ignore[misc]
-            await self._redis.delete(self._key("agents", "topic", topic))  # type: ignore[misc]
+            await self._redis.srem(self._key("topics"), topic)  # type: ignore
+            await self._redis.delete(self._key("agents", "topic", topic))
 
         return results[0] > 0
 
@@ -301,9 +301,9 @@ class RedisStore(BaseStore):
         """Delete all agents for a topic."""
         if not self._redis:
             await self.connect()
-        assert self._redis is not None  # Type narrowing after connect
+        assert self._redis is not None
 
-        agent_names = await self._redis.smembers(self._key("agents", "topic", topic))  # type: ignore[misc]
+        agent_names = await self._redis.smembers(self._key("agents", "topic", topic))  # type: ignore
 
         if not agent_names:
             return 0
@@ -312,11 +312,11 @@ class RedisStore(BaseStore):
 
         async with self._redis.pipeline(transaction=True) as pipe:
             for key in agent_keys:
-                await pipe.delete(key)  # type: ignore[misc]
+                await pipe.delete(key)
 
-            await pipe.delete(self._key("agents", "topic", topic))  # type: ignore[misc]
+            await pipe.delete(self._key("agents", "topic", topic))
 
-            await pipe.srem(self._key("topics"), topic)  # type: ignore[misc]
+            await pipe.srem(self._key("topics"), topic)  # type: ignore
 
             await pipe.execute()
 
@@ -340,7 +340,7 @@ class RedisStore(BaseStore):
         """
         if not self._redis:
             await self.connect()
-        assert self._redis is not None  # Type narrowing after connect
+        assert self._redis is not None
 
         result_key = self._key("result", task_id)
         result_data = {
@@ -373,7 +373,7 @@ class RedisStore(BaseStore):
         """
         if not self._redis:
             await self.connect()
-        assert self._redis is not None  # Type narrowing after connect
+        assert self._redis is not None
 
         result_key = self._key("result", task_id)
         data = await self._redis.get(result_key)
@@ -389,7 +389,7 @@ class RedisStore(BaseStore):
         """Delete a task result."""
         if not self._redis:
             await self.connect()
-        assert self._redis is not None  # Type narrowing after connect
+        assert self._redis is not None
 
         result_key = self._key("result", task_id)
 
@@ -404,7 +404,7 @@ class RedisStore(BaseStore):
         """List recent results."""
         if not self._redis:
             await self.connect()
-        assert self._redis is not None  # Type narrowing after connect
+        assert self._redis is not None
 
         task_ids = await self._redis.zrevrange(
             self._key("results", "index"), 0, limit - 1
@@ -439,7 +439,7 @@ class RedisStore(BaseStore):
         """
         if not self._redis:
             await self.connect()
-        assert self._redis is not None  # Type narrowing after connect
+        assert self._redis is not None
 
         metric_data["saved_at"] = time.time()
 
@@ -469,7 +469,7 @@ class RedisStore(BaseStore):
         """
         if not self._redis:
             await self.connect()
-        assert self._redis is not None  # Type narrowing after connect
+        assert self._redis is not None
 
         entries = await self._redis.xrevrange(
             self._key("metrics", "stream"), count=limit
@@ -500,7 +500,7 @@ class RedisStore(BaseStore):
         """
         if not self._redis:
             await self.connect()
-        assert self._redis is not None  # Type narrowing after connect
+        assert self._redis is not None
 
         config_key = self._key("config", key)
         await self._redis.set(config_key, json.dumps(value, default=str))
@@ -518,7 +518,7 @@ class RedisStore(BaseStore):
         """
         if not self._redis:
             await self.connect()
-        assert self._redis is not None  # Type narrowing after connect
+        assert self._redis is not None
 
         config_key = self._key("config", key)
         data = await self._redis.get(config_key)
@@ -535,7 +535,7 @@ class RedisStore(BaseStore):
         """Clear all agents."""
         if not self._redis:
             await self.connect()
-        assert self._redis is not None  # Type narrowing after connect
+        assert self._redis is not None
 
         pattern = self._key("agent", "*")
         count = 0
@@ -556,7 +556,7 @@ class RedisStore(BaseStore):
         """Clear all results."""
         if not self._redis:
             await self.connect()
-        assert self._redis is not None  # Type narrowing after connect
+        assert self._redis is not None
 
         pattern = self._key("result", "*")
         count = 0
@@ -573,7 +573,7 @@ class RedisStore(BaseStore):
         """Clear all metrics."""
         if not self._redis:
             await self.connect()
-        assert self._redis is not None  # Type narrowing after connect
+        assert self._redis is not None
 
         count = await self._redis.xlen(self._key("metrics", "stream"))
         await self._redis.delete(self._key("metrics", "stream"))

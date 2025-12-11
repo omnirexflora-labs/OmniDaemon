@@ -10,6 +10,10 @@ from omnidaemon.storage import store as default_store
 from omnidaemon.storage.base import BaseStore
 from omnidaemon.schemas import AgentConfig, EventEnvelope, PayloadBase
 from pydantic import ValidationError
+from omnidaemon.agent_runner.supervisor_storage import (
+    get_supervisor_state,
+    list_all_supervisors,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -169,46 +173,104 @@ class OmniDaemonSDK:
 
     async def list_agents(self) -> Dict[str, List[Dict[str, Any]]]:
         """
-        List all registered agents with metadata, grouped by topic.
+        List all registered agents with metadata and supervisor health, grouped by topic.
 
         This method retrieves all agents from storage and returns them grouped
-        by topic with their metadata (name, tools, description, callback, config).
+        by topic with their metadata (name, tools, description, callback, config)
+        plus live supervisor health data (state, CPU, memory, restarts) if available.
 
         Returns:
-            Dictionary mapping topic names to lists of agent metadata dictionaries
+            Dictionary mapping topic names to lists of agent dictionaries with:
+            - Static metadata (name, tools, description, callback, config)
+            - Supervisor health (state, healthy, cpu_percent, memory_mb, restart_count, etc.)
         """
         all_agents = await self.store.list_all_agents()
+        all_supervisors = await list_all_supervisors()
 
-        result = {}
+        logger.info(f"list_agents: Found {len(all_agents)} topics")
+        logger.info(
+            f"list_agents: Found {len(all_supervisors)} supervisors: {list(all_supervisors.keys())}"
+        )
+
+        result: Dict[str, List[Dict[str, Any]]] = {}
         for topic, agents in all_agents.items():
-            result[topic] = [
-                {
-                    "name": agent["name"],
+            result[topic] = []
+            for agent in agents:
+                agent_name = agent["name"]
+
+                agent_data = {
+                    "name": agent_name,
                     "tools": agent.get("tools", []),
                     "description": agent.get("description", ""),
                     "callback": agent.get("callback_name", ""),
                     "config": agent.get("config", {}),
                 }
-                for agent in agents
-            ]
+
+                supervisor_state = all_supervisors.get(agent_name)
+                if supervisor_state:
+                    logger.debug(
+                        f"list_agents: Adding supervisor data for {agent_name}"
+                    )
+                    agent_data.update(
+                        {
+                            "state": supervisor_state.get("state"),
+                            "healthy": supervisor_state.get("healthy", False),
+                            "cpu_percent": supervisor_state.get("cpu_percent", 0.0),
+                            "memory_mb": supervisor_state.get("memory_mb", 0.0),
+                            "restart_count": supervisor_state.get("restart_count", 0),
+                            "last_heartbeat": supervisor_state.get("last_heartbeat"),
+                            "pid": supervisor_state.get("pid"),
+                        }
+                    )
+                else:
+                    logger.debug(f"list_agents: No supervisor data for {agent_name}")
+
+                result[topic].append(agent_data)
 
         return result
 
     async def get_agent(self, topic: str, agent_name: str) -> Optional[Dict[str, Any]]:
         """
-        Get full agent information by topic and name.
+        Get full agent information by topic and name with supervisor health.
 
         Args:
             topic: The topic name
             agent_name: The agent name/identifier
 
         Returns:
-            Agent data dictionary with all metadata, or None if not found
+            Agent data dictionary with metadata and supervisor health, or None if not found
         """
         agent = await self.store.get_agent(topic, agent_name)
-        if agent:
-            agent["callback"] = agent.get("callback_name", "")
-        return agent
+        if not agent:
+            return None
+
+        callback_name = agent.get("callback_name", "")
+        if not isinstance(callback_name, str):
+            callback_name = getattr(callback_name, "__name__", str(callback_name))
+
+        result = {
+            "name": agent.get("name"),
+            "tools": agent.get("tools", []),
+            "description": agent.get("description", ""),
+            "callback": callback_name,
+            "config": agent.get("config", {}),
+        }
+
+        supervisor_state = await get_supervisor_state(agent_name)
+        if supervisor_state:
+            result.update(
+                {
+                    "state": supervisor_state.get("state"),
+                    "healthy": supervisor_state.get("healthy", False),
+                    "cpu_percent": supervisor_state.get("cpu_percent", 0.0),
+                    "memory_mb": supervisor_state.get("memory_mb", 0.0),
+                    "restart_count": supervisor_state.get("restart_count", 0),
+                    "last_heartbeat": supervisor_state.get("last_heartbeat"),
+                    "pid": supervisor_state.get("pid"),
+                }
+            )
+
+        return result
 
     async def unsubscribe_agent(self, topic: str, agent_name: str) -> bool:
         """
@@ -344,6 +406,17 @@ class OmniDaemonSDK:
                 active_consumers = await self.event_bus.get_consumers()
 
                 for group_name, group_info in active_consumers.items():
+                    if "callback" in group_info:
+                        cb = group_info["callback"]
+                        if not isinstance(cb, str):
+                            group_info["callback"] = getattr(cb, "__name__", str(cb))
+
+                    if "config" in group_info and isinstance(
+                        group_info["config"], dict
+                    ):
+                        pass
+
+                for group_name, group_info in active_consumers.items():
                     consumers_count = group_info.get("consumers_count", 0)
                     if consumers_count > 0:
                         has_active_consumers = True
@@ -382,6 +455,28 @@ class OmniDaemonSDK:
         else:
             status = "down"
 
+        all_supervisors = await list_all_supervisors()
+        agent_health = {}
+        healthy_count = 0
+        unhealthy_count = 0
+
+        for agent_name, supervisor_state in all_supervisors.items():
+            is_healthy = supervisor_state.get("healthy", False)
+            agent_health[agent_name] = {
+                "state": supervisor_state.get("state", "UNKNOWN"),
+                "healthy": is_healthy,
+                "restart_count": supervisor_state.get("restart_count", 0),
+                "last_heartbeat": supervisor_state.get("last_heartbeat", 0),
+                "cpu_percent": supervisor_state.get("cpu_percent", 0.0),
+                "memory_mb": supervisor_state.get("memory_mb", 0.0),
+                "pid": supervisor_state.get("pid"),
+            }
+
+            if is_healthy:
+                healthy_count += 1
+            else:
+                unhealthy_count += 1
+
         return {
             "runner_id": stored_runner_id or self.runner.runner_id,
             "status": status,
@@ -397,6 +492,9 @@ class OmniDaemonSDK:
             "registered_agents_count": registered_count,
             "active_consumers": active_consumers,
             "uptime_seconds": uptime_seconds,
+            "agent_health": agent_health,
+            "healthy_agents_count": healthy_count,
+            "unhealthy_agents_count": unhealthy_count,
         }
 
     async def get_result(self, task_id: str) -> Optional[Dict[str, Any]]:

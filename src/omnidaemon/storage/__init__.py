@@ -58,7 +58,6 @@ elif _backend_type.lower() == "redis":
     key_prefix = config("REDIS_KEY_PREFIX", default="omni")
     store = create_store("redis", redis_url=redis_url, key_prefix=key_prefix)
 else:
-    # Fallback to JSON
     store = create_store("json", storage_dir=".omnidaemon_data")
 
 

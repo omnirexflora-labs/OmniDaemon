@@ -14,7 +14,43 @@ It's the foundational layer that turns AI intelligence into production-grade, ev
 
 <sub>**C4 Model Architecture Diagram** - System context and container-level view of OmniDaemon's architecture</sub>
 
----
+## High-Level Overview
+
+```mermaid
+graph TB
+    subgraph External
+        Client[Client App]
+        Redis[(Redis Streams)]
+        Storage[(Storage)]
+    end
+    
+    subgraph OmniDaemon["OmniDaemon Process"]
+        SDK[OmniDaemonSDK]
+        Runner[AgentRunner]
+        EventBus[RedisStreamEventBus]
+        Supervisor1[AgentSupervisor 1]
+        Supervisor2[AgentSupervisor 2]
+    end
+    
+    subgraph Agents["Agent Processes (Isolated)"]
+        Agent1[Agent 1 Process]
+        Agent2[Agent 2 Process]
+    end
+    
+    Client --> SDK
+    SDK --> Runner
+    Runner --> EventBus
+    EventBus <--> Redis
+    Runner --> Storage
+    EventBus --> Supervisor1
+    EventBus --> Supervisor2
+    Supervisor1 <-.->|stdio| Agent1
+    Supervisor2 <-.->|stdio| Agent2
+```
+
+**Key Insight**: OmniDaemon is 99% I/O-bound. All heavy computation happens in isolated agent processes.
+
+See also: [Agent Supervisor Architecture](agent-supervisor.mdx) | [Framework Comparison](../core-concepts/vs-other-frameworks.mdx)
 
 ## Core Architecture Principles
 

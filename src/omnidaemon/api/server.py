@@ -468,7 +468,7 @@ def create_app(sdk: OmniDaemonSDK) -> FastAPI:
 
 
 async def start_api_server(
-    sdk: OmniDaemonSDK, host: str = "127.0.0.1", port: int = 8000
+    sdk: OmniDaemonSDK, host: str = "0.0.0.0", port: int = 8000
 ) -> None:
     """
     Start the FastAPI server for the OmniDaemon control API.
@@ -478,7 +478,7 @@ async def start_api_server(
 
     Args:
         sdk: OmniDaemonSDK instance to use for API operations
-        host: Host address to bind to (default: "127.0.0.1")
+        host: Host address to bind to (default: "0.0.0.0")
         port: Port number to listen on (default: 8000)
 
     Note:

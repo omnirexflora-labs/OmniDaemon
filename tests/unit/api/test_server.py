@@ -84,13 +84,11 @@ class TestAPIServerPublishTaskEndpoint:
         app = create_app(mock_sdk)
         client = TestClient(app)
 
-        # Invalid event - missing topic
         event_data = {"payload": {"content": "test"}}
 
         response = client.post("/publish-tasks", json=event_data)
 
-        # FastAPI will validate before calling the endpoint
-        assert response.status_code in [400, 422]  # Validation error
+        assert response.status_code in [400, 422]
 
     @pytest.mark.asyncio
     async def test_publish_task_server_error(self):
@@ -767,19 +765,16 @@ class TestAPIServerErrorHandling:
         """Test API handles validation errors."""
         mock_sdk = MagicMock()
 
-        # SDK raises ValueError (ValidationError is a ValueError subclass)
         mock_sdk.publish_task = AsyncMock(
             side_effect=ValueError("Invalid topic format")
         )
         app = create_app(mock_sdk)
         client = TestClient(app)
 
-        # Valid event structure, but SDK will raise ValueError
         event_data = {"topic": "test.topic", "payload": {"content": "test"}}
 
         response = client.post("/publish-tasks", json=event_data)
 
-        # ValueError is caught by ValueError handler, returns 400
         assert response.status_code == 400
         assert "Invalid event" in response.json()["detail"]
 
@@ -791,9 +786,6 @@ class TestAPIServerErrorHandling:
         app = create_app(mock_sdk)
         client = TestClient(app)
 
-        # This will cause an unhandled exception
-        # Note: FastAPI will catch it, but the endpoint might not have explicit error handling
-        # Let's test with an endpoint that has error handling
         mock_sdk.list_streams = AsyncMock(side_effect=Exception("Server error"))
         response = client.get("/bus/streams")
 

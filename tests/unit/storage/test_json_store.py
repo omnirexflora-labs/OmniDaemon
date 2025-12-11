@@ -48,7 +48,6 @@ class TestJSONStoreInitialization:
     @pytest.mark.asyncio
     async def test_json_store_init_loads_existing_data(self, temp_storage_dir):
         """Test initialization loads existing data."""
-        # Create existing data files
         agents_file = Path(temp_storage_dir) / "agents.json"
         agents_file.write_text(json.dumps({"test.topic": [{"name": "test-agent"}]}))
 
@@ -66,7 +65,6 @@ class TestJSONStoreConnection:
     @pytest.mark.asyncio
     async def test_connect_loads_all_data(self, store, temp_storage_dir):
         """Test connect loads all data files."""
-        # Create data files
         agents_file = Path(temp_storage_dir) / "agents.json"
         results_file = Path(temp_storage_dir) / "results.json"
         metrics_file = Path(temp_storage_dir) / "metrics.json"
@@ -91,7 +89,6 @@ class TestJSONStoreConnection:
         await store.connect()
         await store.connect()
 
-        # Should not raise exception
         assert store._connected
 
     @pytest.mark.asyncio
@@ -105,7 +102,6 @@ class TestJSONStoreConnection:
 
         await store.close()
 
-        # Verify files exist and contain data
         assert store.agents_file.exists()
         assert store.results_file.exists()
         assert store.metrics_file.exists()
@@ -119,7 +115,6 @@ class TestJSONStoreConnection:
 
         await store.close()
 
-        # Verify no .tmp files remain
         tmp_files = list(store.storage_dir.glob("*.tmp"))
         assert len(tmp_files) == 0
 
@@ -165,7 +160,6 @@ class TestJSONStoreHealthCheck:
     @pytest.mark.asyncio
     async def test_health_check_handles_errors(self, store, temp_storage_dir):
         """Test health_check handles file errors."""
-        # Make storage directory read-only to cause write error
         os.chmod(temp_storage_dir, 0o444)
 
         try:
@@ -375,7 +369,6 @@ class TestJSONStoreResultCRUD:
         result = await store.get_result("task-1")
         assert result is not None
 
-        # Wait for expiration
         time.sleep(1.1)
 
         result = await store.get_result("task-1")
@@ -387,7 +380,6 @@ class TestJSONStoreResultCRUD:
         await store.connect()
         await store.save_result("task-1", {"result": "data"})
 
-        # Wait a bit
         time.sleep(0.1)
 
         result = await store.get_result("task-1")
@@ -458,7 +450,7 @@ class TestJSONStoreResultCRUD:
         await store.save_result("task-2", {"result": "data2"})
 
         results = await store.list_results()
-        assert results[0]["task_id"] == "task-2"  # Most recent first
+        assert results[0]["task_id"] == "task-2"
         assert results[1]["task_id"] == "task-1"
 
     @pytest.mark.asyncio
@@ -511,8 +503,6 @@ class TestJSONStoreMetric:
     async def test_save_metric_limits_size(self, store):
         """Test save_metric limits metrics list size."""
         await store.connect()
-        # Directly manipulate internal state to test limit without slow file I/O
-        # Add 10001 metrics directly to _metrics list (using lock for thread safety)
         with store._lock:
             for i in range(10001):
                 store._metrics.append(
@@ -523,12 +513,10 @@ class TestJSONStoreMetric:
                     }
                 )
 
-        # Now save one more metric - this should trigger the limit check (10001 > 10000)
         await store.save_metric({"topic": "test.topic", "event": "trigger_limit"})
 
         metrics = await store.get_metrics()
         assert len(metrics) <= 10000
-        # Verify the oldest metrics were removed (should be exactly 10000 now)
         with store._lock:
             assert len(store._metrics) == 10000
 
@@ -572,7 +560,7 @@ class TestJSONStoreMetric:
         await store.save_metric({"topic": "test.topic", "event": "event2"})
 
         metrics = await store.get_metrics()
-        assert metrics[0]["event"] == "event2"  # Most recent first
+        assert metrics[0]["event"] == "event2"
 
     @pytest.mark.asyncio
     async def test_clear_metrics_success(self, store):

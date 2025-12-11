@@ -12,7 +12,6 @@ The event bus backend is determined by environment variables:
 Usage:
     from omnidaemon.event_bus import event_bus
 
-    # Event bus is pre-configured and ready to use
     await event_bus.connect()
     await event_bus.publish({"topic": "test", "payload": {...}})
 """
@@ -23,7 +22,6 @@ from omnidaemon.event_bus.base import BaseEventBus
 from omnidaemon.event_bus.redis_stream_bus import RedisStreamEventBus
 
 
-# Registry of available event bus backends
 EVENT_BUS_BACKENDS: Dict[str, Type[Any]] = {
     "redis_stream": RedisStreamEventBus,
 }
@@ -66,7 +64,6 @@ if _backend_type.lower() == "redis_stream":
     )
 
 else:
-    # Default to redis_stream
     redis_url = config("REDIS_URL", default="redis://localhost:6379")
     event_bus = create_event_bus("redis_stream", redis_url=redis_url)
 
