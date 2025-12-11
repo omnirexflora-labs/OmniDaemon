@@ -1,764 +1,473 @@
+---
+title: "OmniCore Agent with Supervisor"
+description: "Production-ready OmniCore Agent integration with process isolation"
+---
+
 # OmniCore Agent Example
 
-This page provides a complete, production-ready example of integrating **OmniCore Agent** with OmniDaemon. OmniCore Agent is an AI agent framework with MCP (Model Context Protocol) tool support, built by the same team as OmniDaemon.
+Learn how to run **[OmniCore Agent](https://github.com/omnirexflora-labs/omnicoreagent)** in production with OmniDaemon using the Supervisor pattern.
+
+> 💡 **Working code:** [`examples/agents_with_supervisors/`](https://github.com/omnirexflora-labs/OmniDaemon/tree/main/examples/agents_with_supervisors)
 
 ---
 
-## Overview
+## The Challenge
 
-**What This Example Shows:**
-- ✅ Full OmniCore Agent integration
-- ✅ MCP tool integration (filesystem tools)
-- ✅ Event-driven agent pattern
-- ✅ Multiple agent registration
-- ✅ Proper initialization and cleanup
-- ✅ Graceful shutdown handling
-- ✅ Production-ready error handling
+When running AI agents in production, you face a critical problem: **one agent crash shouldn't kill your entire system**.
 
-**Source Code:** `examples/omnicoreagent/agent_runner.py`
+Most AI frameworks run everything in a single Python process:
+- ❌ Agent crashes → entire process dies
+- ❌ Memory leak in one agent → affects all agents  
+- ❌ No isolation → agents share the same memory space
+- ❌ Exception in agent code → takes down the whole system
 
----
-
-## Prerequisites
-
-### 1. Install OmniDaemon
-
-```bash
-# Recommended: uv (fast & modern)
-uv add omnidaemon
-
-# Or with pip:
-pip install omnidaemon
-```
-
-### 2. Install OmniCore Agent
-
-```bash
-# Recommended: uv
-uv add omnicoreagent
-
-# Or with pip:
-pip install omnicoreagent
-```
-
-### 3. Install Node.js (for MCP tools)
-
-MCP filesystem tools run via npx:
-
-```bash
-# Check if Node.js is installed
-node --version
-npm --version
-
-# If not installed:
-# macOS: brew install node
-# Ubuntu: sudo apt install nodejs npm
-# Windows: Download from nodejs.org
-```
-
-### 4. Set Up API Keys
-
-OmniCore Agent requires an OpenAI API key:
-
-```bash
-# Create .env file
-cat > .env << 'EOF'
-OPENAI_API_KEY=your_openai_api_key_here
-
-# Optional OmniDaemon settings
-REDIS_URL=redis://localhost:6379
-STORAGE_BACKEND=json
-JSON_STORAGE_DIR=.omnidaemon_data
-EOF
-```
-
-### 5. Set Up Redis (Event Bus)
-
-```bash
-# Docker (easiest)
-docker run -d -p 6379:6379 --name redis redis:latest
-
-# Or install locally
-# macOS: brew install redis && brew services start redis
-# Ubuntu: sudo apt install redis-server && sudo systemctl start redis
-```
+This isn't acceptable for production. You need fault isolation.
 
 ---
 
-## Complete Working Example
+## The Supervisor Solution
 
-### File: `agent_runner.py`
+OmniDaemon solves this with **Agent Supervisors** - lightweight process managers for your AI agents.
 
-```python
-from omnicoreagent import OmniAgent, ToolRegistry, MemoryRouter, EventRouter
-from typing import Optional
-import asyncio
-import logging
-from decouple import config
-from omnidaemon import OmniDaemonSDK, start_api_server, AgentConfig, SubscriptionConfig
+### What is a Supervisor?
 
-# Initialize SDK (uses dependency injection for storage & event bus)
-sdk = OmniDaemonSDK()
+A Supervisor is a component that runs your agent in its own isolated process and manages its lifecycle.
 
-logger = logging.getLogger(__name__)
+**Think of it like Docker containers**, but for Python AI agents:
+- Each agent runs in a **separate process** (different PID)
+- Supervisor monitors the agent process health  
+- Automatically restarts crashed agents
+- Handles clean shutdown and resource cleanup
+- Communicates with agent via stdio (JSON protocol)
 
-# Configure MCP Tools (filesystem tools via Node.js)
-MCP_TOOLS = [
-    {
-        "name": "filesystem",
-        "command": "npx",
-        "args": [
-            "-y",
-            "@modelcontextprotocol/server-filesystem",
-            "/home/user/your_target_folder",  # CHANGE THIS!
-        ],
-    },
-]
+### Why This Matters
 
-
-class OmniAgentRunner:
-    """Wrapper for OmniCore Agent with initialization management."""
-
-    def __init__(self):
-        """Initialize the agent runner."""
-        self.agent: Optional[OmniAgent] = None
-        self.memory_router: Optional[MemoryRouter] = None
-        self.event_router: Optional[EventRouter] = None
-        self.connected = False
-        self.session_id: Optional[str] = None
-
-    async def initialize(self):
-        """Initialize all OmniCore Agent components."""
-        if self.connected:
-            logger.info("OmniAgent already initialized")
-            return
-
-        logger.info("🚀 Initializing OmniAgent...")
-
-        # Initialize routers
-        self.memory_router = MemoryRouter("in_memory")
-        self.event_router = EventRouter("in_memory")
-
-        # Initialize OmniCore Agent
-        self.agent = OmniAgent(
-            name="filesystem_assistant_agent",
-            system_instruction="Help the user manage their files. You can list files, read files, etc.",
-            model_config={
-                "provider": "openai",
-                "model": "gpt-4o",
-                "temperature": 0,
-                "max_context_length": 1000,
-            },
-            mcp_tools=MCP_TOOLS,
-            agent_config={
-                "agent_name": "OmniAgent",
-                "max_steps": 15,
-                "tool_call_timeout": 20,
-                "request_limit": 0,  # 0 = unlimited
-                "total_tokens_limit": 0,
-                # Memory config
-                "memory_config": {"mode": "sliding_window", "value": 100},
-                "memory_results_limit": 5,
-                "memory_similarity_threshold": 0.5,
-                # Tool retrieval config
-                "enable_tools_knowledge_base": False,
-                "tools_results_limit": 10,
-                "tools_similarity_threshold": 0.1,
-            },
-            memory_router=self.memory_router,
-            event_router=self.event_router,
-            debug=False,
-        )
-
-        # Connect to MCP servers
-        await self.agent.connect_mcp_servers()
-        self.connected = True
-
-        logger.info("✅ OmniAgent initialized successfully")
-
-    async def handle_chat(self, message: str):
-        """Process a message with the agent."""
-        if not self.agent:
-            logger.error("Agent not initialized")
-            return None
-
-        logger.info(f"🤖 Processing: {message}")
-
-        # Generate session ID if needed
-        if not self.session_id:
-            from datetime import datetime
-            self.session_id = (
-                f"cli_session_{datetime.now().strftime('%Y-%m-%dT%H-%M-%S')}"
-            )
-
-        try:
-            # Run the agent
-            result = await self.agent.run(message)
-            response = result.get("response", "No response received")
-            return response
-        except Exception as e:
-            logger.exception(f"Error processing message: {e}")
-            raise
-
-    async def shutdown(self):
-        """Clean up OmniAgent resources."""
-        if self.agent and getattr(self.agent, "mcp_tools", None):
-            try:
-                await self.agent.cleanup()
-                logger.info("OmniAgent MCP cleanup successful")
-            except Exception as e:
-                logger.warning(f"OmniAgent MCP cleanup failed: {e}")
-
-
-# Create agent runner instance
-filesystem_agent_runner = OmniAgentRunner()
-
-
-# ============================================
-# CALLBACK FUNCTIONS (Where AI Agent Runs!)
-# ============================================
-
-async def call_file_system_agent(message: dict):
-    """
-    Main callback for file system agent.
-
-    This is called automatically by OmniDaemon when an event arrives.
-
-    Args:
-        message: Event envelope containing:
-            - content: Your data (query/command)
-            - correlation_id: Request tracking
-            - tenant_id: Multi-tenancy
-            - source: Event origin
-            - webhook: Callback URL
-            - reply_to: Response topic
-            - etc.
-
-    Returns:
-        Dict with status and result
-    """
-    logger.info(f"Received event: {message}")
-
-    # Initialize agent if needed
-    await filesystem_agent_runner.initialize()
-
-    # Extract query from content
-    query = message.get("content")
-
-    # Run OmniCore Agent
-    result = await filesystem_agent_runner.handle_chat(message=query)
-
-    return {
-        "status": "success",
-        "data": result,
-        "processed_by": "OmniCore Agent"
-    }
-
-
-async def call_response_handler(message: dict):
-    """
-    Response handler for file system agent responses.
-
-    This agent listens to responses from the file system agent.
-    """
-    logger.info(f"Received response: {message}")
-
-    # Process response
-    # (Add your logic here)
-
-    return {"status": "acknowledged"}
-
-
-# ============================================
-# MAIN FUNCTION
-# ============================================
-
-async def main():
-    try:
-        # Register agents with OmniDaemon
-        logger.info("Registering agents...")
-
-        # Agent 1: File System Agent (processes file operations)
-        await sdk.register_agent(
-            agent_config=AgentConfig(
-                name="OMNICOREAGENT_FILESYSTEM_AGENT",
-                topic="file_system.tasks",
-                callback=call_file_system_agent,
-                description="Help the user manage their files. You can list files, read files, etc.",
-                tools=[],  # MCP tools configured in agent
-                config=SubscriptionConfig(
-                    reclaim_idle_ms=6000,      # 6 seconds
-                    dlq_retry_limit=3,         # 3 retries before DLQ
-                    consumer_count=3,          # 3 parallel consumers
-                ),
-            )
-        )
-
-        # Agent 2: Response Handler (processes responses)
-        await sdk.register_agent(
-            agent_config=AgentConfig(
-                name="OMNICOREAGENT_RESPONSE",
-                topic="file_system.response",
-                callback=call_response_handler,
-                description="Response handler for file system agent.",
-                tools=[],
-                config=SubscriptionConfig(
-                    reclaim_idle_ms=6000,
-                    dlq_retry_limit=3,
-                    consumer_count=1,
-                ),
-            )
-        )
-
-        logger.info("✅ Agents registered successfully")
-
-        # Start the agent runner
-        logger.info("Starting OmniDaemon agent runner...")
-        await sdk.start()
-        logger.info("🎧 OmniDaemon agent runner started")
-
-        # Optional: Start API server
-        enable_api = config("OMNIDAEMON_API_ENABLED", default=False, cast=bool)
-        api_port = config("OMNIDAEMON_API_PORT", default=8765, cast=int)
-        if enable_api:
-            asyncio.create_task(start_api_server(sdk, port=api_port))
-            logger.info(f"📡 OmniDaemon API running on http://127.0.0.1:{api_port}")
-
-        # Keep running to process events
-        logger.info("✅ Agent runner is now processing events. Press Ctrl+C to stop.")
-        try:
-            while True:
-                await asyncio.sleep(1)
-        except (KeyboardInterrupt, asyncio.CancelledError):
-            logger.info("Received shutdown signal (Ctrl+C)...")
-
-    except (KeyboardInterrupt, asyncio.CancelledError):
-        logger.info("Received shutdown signal...")
-    except Exception as e:
-        logger.error(f"Error during agent runner execution: {e}", exc_info=True)
-        raise
-
-    finally:
-        # ALWAYS cleanup resources
-        logger.info("Shutting down OmniDaemon...")
-        try:
-            await sdk.shutdown()
-            logger.info("✅ OmniDaemon shutdown complete")
-        except Exception as e:
-            logger.error(f"Error during shutdown: {e}", exc_info=True)
-
-        # Cleanup OmniCore Agent resources
-        try:
-            await filesystem_agent_runner.shutdown()
-            logger.info("✅ OmniAgent cleanup complete")
-        except Exception as e:
-            logger.error(f"Error during OmniAgent cleanup: {e}", exc_info=True)
-
-
-# ============================================
-# Run the example
-# ============================================
-if __name__ == "__main__":
-    asyncio.run(main())
+**Without Supervisor** (all in one process):
 ```
+Main Process (PID: 1234)
+├── OmniDaemon
+├── Agent A ← crashes
+└── Agent B ← also dies! ❌
+```
+
+**With Supervisor** (process isolation):
+```
+Main Process (PID: 1234)
+├── OmniDaemon
+├── Supervisor A → Agent A Process (PID: 5678) ← crashes
+│                  ↓ auto-restarts ✅
+└── Supervisor B → Agent B Process (PID: 5679) ← keeps running ✅
+```
+
+**Production Benefits:**
+- ✅ **Fault Isolation** - Agent A crashes, Agent B keeps running
+- ✅ **Auto-Recovery** - Crashed agents restart automatically
+- ✅ **Resource Isolation** - Each agent has its own memory/CPU space
+- ✅ **Clean Shutdown** - Supervisors handle graceful termination
+
+> 📚 **Deep Dive:** [Agent Supervisor Architecture](../architecture/agent-supervisor.mdx) explains the technical details of how supervisors work under the hood.
 
 ---
 
-## Code Explanation
+## How It Works
 
-### 1. Imports
+Instead of running your agent callback directly in the main process (risky), you wrap it in a supervisor.
 
-```python
-from omnicoreagent import OmniAgent, ToolRegistry, MemoryRouter, EventRouter
-from omnidaemon import OmniDaemonSDK
-from omnidaemon import AgentConfig, SubscriptionConfig
-```
-
-**Key Imports:**
-- `OmniAgent` - Main OmniCore Agent class
-- `MemoryRouter`, `EventRouter` - Memory and event management
-- `OmniDaemonSDK` - OmniDaemon SDK (uses DI for storage/event bus)
-- `AgentConfig`, `SubscriptionConfig` - Configuration schemas
-
-### 2. OmniCore Agent Initialization
+### ❌ Simple Pattern (Development Only)
 
 ```python
-class OmniAgentRunner:
-    async def initialize(self):
-        # Create routers
-        self.memory_router = MemoryRouter("in_memory")
-        self.event_router = EventRouter("in_memory")
+# Agent runs in main process - one crash kills everything
+async def my_agent_callback(message: dict):
+    agent = OmniAgent(...)
+    return await agent.run(message["content"])
 
-        # Initialize agent
-        self.agent = OmniAgent(
-            name="filesystem_assistant_agent",
-            system_instruction="...",
-            model_config={"provider": "openai", "model": "gpt-4o"},
-            mcp_tools=MCP_TOOLS,
-            agent_config={...},
-            memory_router=self.memory_router,
-            event_router=self.event_router,
-        )
-
-        # Connect MCP servers
-        await self.agent.connect_mcp_servers()
-```
-
-**Why This Pattern?**
-- ✅ **Lazy initialization** - Only initialize when first message arrives
-- ✅ **Reusable** - Same agent instance for all messages
-- ✅ **Efficient** - MCP servers stay connected
-
-### 3. The Callback (Where AI Runs!)
-
-```python
-async def call_file_system_agent(message: dict):
-    """This is called when an event arrives."""
-
-    # Initialize if needed
-    await filesystem_agent_runner.initialize()
-
-    # Extract query
-    query = message.get("content")
-
-    # Run OmniCore Agent (THIS IS WHERE AI RUNS!)
-    result = await filesystem_agent_runner.handle_chat(message=query)
-
-    return {"status": "success", "data": result}
-```
-
-**Key Points:**
-- `message` contains full `EventEnvelope` (content, metadata, etc.)
-- `agent.run()` executes the OmniCore Agent
-- Return value saved to storage (24h TTL)
-
-### 4. Agent Registration
-
-```python
 await sdk.register_agent(
     agent_config=AgentConfig(
-        name="OMNICOREAGENT_FILESYSTEM_AGENT",
-        topic="file_system.tasks",
-        callback=call_file_system_agent,
-        config=SubscriptionConfig(
-            reclaim_idle_ms=6000,
-            dlq_retry_limit=3,
-            consumer_count=3,
-        ),
+        topic="my.topic",
+        callback=my_agent_callback  # Runs in main process!
     )
 )
 ```
 
-**Configuration Explained:**
-- `name` - Unique agent identifier
-- `topic` - Events to listen to
-- `callback` - Function to call (where AI runs)
-- `reclaim_idle_ms` - How long before reclaiming (6 sec for fast tasks)
-- `dlq_retry_limit` - Max retries before DLQ (3)
-- `consumer_count` - Parallel consumers (3 for load balancing)
+**Problems:**
+- No process isolation
+- Crashes affect everything
+- No auto-restart
 
-### 5. Graceful Shutdown
+### ✅ Supervisor Pattern (Production-Ready)
 
 ```python
-finally:
-    # OmniDaemon cleanup
-    await sdk.shutdown()
+# Agent runs in separate process managed by Supervisor
+supervisor = await create_supervisor_from_directory(
+    agent_name="my_agent",
+    agent_dir="./my_agent",           # Directory with agent code
+    callback_function="agent.callback" # Function to call
+)
 
-    # OmniCore Agent cleanup
-    await filesystem_agent_runner.shutdown()
+await sdk.register_agent(
+    agent_config=AgentConfig(
+        topic="my.topic",
+        callback=supervisor.handle_event  # Supervisor manages everything!
+    )
+)
 ```
 
-**Why Both?**
-- `sdk.shutdown()` - Closes event bus, storage connections
-- `agent.shutdown()` - Closes MCP tool connections
+**Benefits:**
+- Process isolation ✅
+- Auto-restart on crash ✅  
+- Resource cleanup ✅
+
+The supervisor handles process spawning, health monitoring, stdio communication, and crash recovery automatically.
+
+> 📚 **How it works internally:** [Complete Agent Process Flow](../how-to-guides/agent-process-flow.mdx) shows the full lifecycle from event to response.
 
 ---
 
-## Running the Example
+## Implementation
 
-### 1. Update Target Folder
+Now that you understand WHY supervisors exist, let's build a production-ready OmniCore Agent.
 
-Edit `agent_runner.py` and change the filesystem path:
+### Prerequisites
 
-```python
-MCP_TOOLS = [
-    {
-        "name": "filesystem",
-        "command": "npx",
-        "args": [
-            "-y",
-            "@modelcontextprotocol/server-filesystem",
-            "/your/actual/path/here",  # CHANGE THIS!
-        ],
-    },
-]
+```bash
+# 1. Install OmniDaemon
+pip install omnidaemon
+
+# 2. Install OmniCore Agent
+pip install omnicoreagent
+
+# 3. Start Redis (event bus)
+docker run -d -p 6379:6379 --name redis redis:latest
+
+# 4. Set environment variables
+export OPENAI_API_KEY=your_key_here
+export REDIS_URL=redis://localhost:6379
 ```
 
-### 2. Run the Agent
+### Directory Structure
+
+The Supervisor pattern requires your agent code in a directory:
+
+```
+my_agent/
+├── __init__.py
+├── agent.py           # Your agent logic (runs in isolated process)
+└── requirements.txt   # Agent dependencies (installed in isolation)
+```
+
+> 💡 **Why a directory?** The supervisor needs to spawn a new process with your agent code. Organizing it in a directory allows the supervisor to install dependencies in isolation and import your callback function properly.
+
+### Step 1: Agent Code
+
+Create `my_agent/agent.py` with your OmniCore Agent logic:
+
+```python
+from omnicoreagent import OmniAgent
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Initialize agent once (runs in separate process)
+_agent = None
+
+async def get_agent():
+    """Lazy initialization - agent created on first use"""
+    global _agent
+    if _agent is None:
+        _agent = OmniAgent(
+            name="filesystem_agent",
+            system_instruction="Help users manage files.",
+            model_config={
+                "provider": "openai",
+                "model": "gpt-4o",
+                "temperature": 0,
+            },
+            mcp_tools=[{
+                "name": "filesystem",
+                "command": "npx",
+                "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/folder"]
+            }],
+        )
+        await _agent.connect_mcp_servers()
+    return _agent
+
+async def call_omnicore_agent(message: dict):
+    """
+    This callback runs in the ISOLATED PROCESS.
+    
+    The supervisor will:
+    1. Spawn a new Python process  
+    2. Import this module
+    3. Call this function with the message
+    4. Return the result back via stdio
+    """
+    agent = await get_agent()
+    query = message.get("content", "")
+    
+    logger.info(f"Processing: {query}")
+    result = await agent.run(query)
+    
+    return {
+        "status": "success",
+        "data": result.get("response", ""),
+    }
+```
+
+**Key Points:**
+- This code runs in a **separate process**, not the main process
+- MCP tools connect once and stay connected
+- Clean separation of concerns
+
+### Step 2: Agent Runner
+
+Create `agent_runner.py` that manages the supervisor:
+
+```python
+import asyncio
+import logging
+from omnidaemon import OmniDaemonSDK, AgentConfig, SubscriptionConfig
+from omnidaemon.agent_runner.agent_supervisor_runner import (
+    create_supervisor_from_directory,
+    shutdown_all_supervisors,
+)
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+sdk = OmniDaemonSDK()
+_supervisor = None
+
+async def get_supervisor():
+    """Initialize supervisor - manages agent process"""
+    global _supervisor
+    if _supervisor is None:
+        _supervisor = await create_supervisor_from_directory(
+            agent_name="omnicore_filesystem_agent",
+            agent_dir="./my_agent",  # Points to our agent directory
+            callback_function="agent.call_omnicore_agent",  # Function to call
+        )
+    return _supervisor
+
+async def call_supervised_agent(message: dict):
+    """Wrapper that delegates to supervisor"""
+    supervisor = await get_supervisor()
+    return await supervisor.handle_event(message)
+
+async def main():
+    try:
+        # Pre-initialize supervisor (spawns agent process)
+        logger.info("Initializing supervisor...")
+        await get_supervisor()
+        
+        # Register with OmniDaemon
+        await sdk.register_agent(
+            agent_config=AgentConfig(
+                name="omnicore_filesystem_agent",
+                topic="file.tasks",
+                callback=call_supervised_agent,  # Supervisor handles events
+                config=SubscriptionConfig(
+                    reclaim_idle_ms=6000,
+                    dlq_retry_limit=3,
+                    consumer_count=3,
+                ),
+            )
+        )
+        
+        logger.info("Starting OmniDaemon...")
+        await sdk.start()
+        logger.info("✅ Agent running in isolated process. Press Ctrl+C to stop.")
+        
+        await asyncio.Event().wait()
+        
+    except KeyboardInterrupt:
+        logger.info("Shutdown signal received")
+    finally:
+        logger.info("Shutting down...")
+        await sdk.shutdown()  # Shutdown event bus
+        await shutdown_all_supervisors()  # Shutdown agent processes
+        logger.info("Shutdown complete")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+**What Happens Here:**
+1. `create_supervisor_from_directory()` spawns a new Python process
+2. Process imports `my_agent.agent` module
+3. Supervisor keeps process running, waiting for events
+4. When event arrives, supervisor sends it to agent via stdio
+5. Agent processes and returns result
+6. Supervisor sends result back to OmniDaemon
+
+### Step 3: Run It
 
 ```bash
 python agent_runner.py
 ```
 
-**Expected Output:**
+**Expected output:**
 ```
-INFO:root:Registering agents...
-INFO:root:✅ Agents registered successfully
-INFO:root:Starting OmniDaemon agent runner...
-[Runner abc-123] Registered agent 'OMNICOREAGENT_FILESYSTEM_AGENT' on topic 'file_system.tasks'
-[Runner abc-123] Registered agent 'OMNICOREAGENT_RESPONSE' on topic 'file_system.response'
-INFO:root:🎧 OmniDaemon agent runner started
-INFO:root:✅ Agent runner is now processing events. Press Ctrl+C to stop.
+INFO - Initializing supervisor...
+INFO - Starting OmniDaemon...
+INFO - ✅ Agent running in isolated process. Press Ctrl+C to stop.
 ```
 
-### 3. Publish an Event
+The agent is now running in its own process, ready to handle events!
 
-**In a new terminal:**
+---
+
+## Testing Your Agent
+
+Publish an event to test:
 
 ```python
 # publisher.py
 import asyncio
-from omnidaemon import OmniDaemonSDK
-from omnidaemon import EventEnvelope, PayloadBase
+from omnidaemon import OmniDaemonSDK, EventEnvelope, PayloadBase
 
 sdk = OmniDaemonSDK()
 
 async def main():
     event = EventEnvelope(
-        topic="file_system.tasks",
-        payload=PayloadBase(
-            content="List all files in the directory"
-        ),
+        topic="file.tasks",
+        payload=PayloadBase(content="List all files in the directory")
     )
-
+    
     task_id = await sdk.publish_task(event_envelope=event)
     print(f"📨 Task ID: {task_id}")
-
-    # Wait for processing
-    await asyncio.sleep(5)
-
-    # Get result
+    
+    await asyncio.sleep(5)  # Wait for processing
+    
     result = await sdk.get_result(task_id)
     print(f"✅ Result: {result}")
 
 asyncio.run(main())
 ```
 
-**Run it:**
+Run it:
 ```bash
 python publisher.py
-```
-
-**Expected Output:**
-```
-📨 Task ID: 550e8400-e29b-41d4-a716-446655440000
-✅ Result: {
-    'status': 'success',
-    'data': 'Here are the files in the directory:\n1. file1.txt\n2. file2.pdf\n3. folder1/',
-    'processed_by': 'OmniCore Agent'
-}
-```
-
-**In the agent terminal:**
-```
-INFO:root:Received event: {'content': 'List all files in the directory', 'topic': 'file_system.tasks', ...}
-INFO:root:🚀 Initializing OmniAgent...
-INFO:root:✅ OmniAgent initialized successfully
-INFO:root:🤖 Processing: List all files in the directory
-[Agent filesystem_assistant_agent] Processed task in 2.35s
-```
-
----
-
-## Customization
-
-### Change AI Model
-
-```python
-self.agent = OmniAgent(
-    model_config={
-        "provider": "openai",
-        "model": "gpt-4o-mini",  # Cheaper model
-        # Or: "gpt-4-turbo", "gpt-3.5-turbo"
-        "temperature": 0.7,      # More creative
-    },
-)
-```
-
-### Add More MCP Tools
-
-```python
-MCP_TOOLS = [
-    {
-        "name": "filesystem",
-        "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path1"],
-    },
-    {
-        "name": "github",
-        "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-github"],
-    },
-]
-```
-
-### Adjust Memory Config
-
-```python
-agent_config={
-    "memory_config": {
-        "mode": "full_history",  # Keep all history
-        # Or: "sliding_window" with "value": 50
-    },
-    "memory_results_limit": 10,  # More memory results
-}
-```
-
-### Multiple Agents
-
-```python
-# Agent 1: File operations
-await sdk.register_agent(
-    agent_config=AgentConfig(
-        topic="file.operations",
-        callback=file_agent_callback,
-    )
-)
-
-# Agent 2: Analysis
-await sdk.register_agent(
-    agent_config=AgentConfig(
-        topic="file.analysis",
-        callback=analysis_agent_callback,
-    )
-)
 ```
 
 ---
 
 ## Production Deployment
 
-### 1. Use Environment Variables
+### Environment Variables
 
 ```bash
 # .env
 OPENAI_API_KEY=your_key
 REDIS_URL=redis://prod-redis:6379
-STORAGE_BACKEND=redis
-OMNIDAEMON_API_ENABLED=true
-OMNIDAEMON_API_PORT=8765
+STORAGE_BACKEND=redis  # Use Redis for production
 LOG_LEVEL=INFO
 ```
 
-### 2. Use Redis Storage
+### Horizontal Scaling
+
+Run multiple instances for load balancing:
 
 ```bash
-STORAGE_BACKEND=redis
-REDIS_URL=redis://prod-redis:6379
+# Each instance runs the same code, automatic load balancing via consumer groups
+python agent_runner.py &  # Instance 1
+python agent_runner.py &  # Instance 2
+python agent_runner.py &  # Instance 3
 ```
 
-### 3. Scale with Multiple Runners
+OmniDaemon automatically distributes work across all instances.
 
-```bash
-# Terminal 1
-python agent_runner.py
-
-# Terminal 2 (same code, automatic load balancing!)
-python agent_runner.py
-
-# Terminal 3
-python agent_runner.py
-```
-
-### 4. Monitor with CLI
+### Monitoring
 
 ```bash
 # Check health
 omnidaemon health
 
-# Check metrics
-omnidaemon metrics --topic file_system.tasks
+# View metrics
+omnidaemon metrics --topic file.tasks
 
-# Inspect DLQ
-omnidaemon bus dlq --topic file_system.tasks
+# Inspect failures (DLQ)
+omnidaemon bus dlq --topic file.tasks
 ```
 
 ---
 
-## Troubleshooting
+## Complete Working Example
 
-### MCP Tools Not Working
+See the full production implementation with Google ADK:
 
-```bash
-# Check Node.js
-node --version
-npm --version
+📁 **[`examples/agents_with_supervisors/`](https://github.com/omnirexflora-labs/OmniDaemon/tree/main/examples/agents_with_supervisors)**
 
-# Test MCP command manually
-npx -y @modelcontextprotocol/server-filesystem /your/path
-```
-
-### Agent Not Processing
-
-```bash
-# Check if agent registered
-omnidaemon agent list
-
-# Check event bus
-omnidaemon bus list
-
-# Check Redis
-redis-cli ping
-```
-
-### OpenAI API Errors
-
-```python
-# Add better error handling
-try:
-    result = await self.agent.run(message)
-    return {"status": "success", "data": result}
-except Exception as e:
-    logger.exception(f"Agent error: {e}")
-    return {
-        "status": "error",
-        "error": str(e),
-        "error_type": type(e).__name__
-    }
-```
+This example includes:
+- Google ADK integration
+- MCP filesystem tools
+- Process isolation with supervisors
+- Error handling
+- Graceful shutdown
+- Multiple agents
 
 ---
 
-## Further Reading
+## Understanding the Architecture
 
-- **[OmniCore Agent Documentation](https://github.com/omnirexflora-labs/omnicoreagent)** - Full OmniCore docs
-- **[Callback Pattern](../core-concepts/callback-pattern.md)** - Understanding callbacks
-- **[Agent Lifecycle](../core-concepts/agent-lifecycle.md)** - Registration to deletion
-- **[Common Patterns](../how-to-guides/common-patterns.md)** - Production recipes
+This supervisor pattern is fundamental to how OmniDaemon achieves production-grade reliability.
+
+### Process Architecture
+
+```
+┌─────────────────────────────────────┐
+│  Main Process (agent_runner.py)    │
+│  ┌───────────────────────────────┐  │
+│  │ OmniDaemonSDK                 │  │
+│  │ - Event bus (Redis)           │  │
+│  │ - Agent registration          │  │
+│  └───────────────────────────────┘  │
+│  ┌───────────────────────────────┐  │
+│  │ AgentSupervisor               │  │
+│  │ - Spawns subprocess           │  │
+│  │ - Monitors health             │  │
+│  │ - stdio communication         │  │
+│  │ - Auto-restart on crash       │  │
+│  └───────────────────────────────┘  │
+│             │ stdio (JSON)           │
+└─────────────┼────────────────────────┘
+              ↓
+       ┌──────────────────────────────┐
+       │ Agent Process (PID: 5678)    │
+       │ ┌──────────────────────────┐ │
+       │ │ my_agent/agent.py        │ │
+       │ │ - OmniCore Agent         │ │
+       │ │ - MCP tools              │ │
+       │ │ - Isolated dependencies  │ │
+       │ └──────────────────────────┘ │
+       └──────────────────────────────┘
+```
+
+### Related Documentation
+
+**Core Concepts:**
+- [Agent Supervisor Architecture](../architecture/agent-supervisor.mdx) - Technical deep dive into how supervisors work
+- [Process Isolation](../how-to-guides/agent-isolation.mdx) - How dependencies and resources are isolated
+
+**Implementation Guides:**
+- [Complete Agent Process Flow](../how-to-guides/agent-process-flow.mdx) - Step-by-step lifecycle from event to response
+- [Common Patterns](../how-to-guides/common-patterns.mdx) - Production-ready patterns and best practices
+
+**Other Examples:**
+- [Google ADK with Supervisor](google-adk-agent.mdx) - Alternative AI framework with supervisors
+- [Content Moderation Pipeline](content-moderation.mdx) - Multi-agent system example
 
 ---
 
-## Summary
+## Key Takeaways
 
-**What You Learned:**
-- ✅ How to integrate OmniCore Agent with OmniDaemon
-- ✅ MCP tool configuration (filesystem tools)
-- ✅ Proper initialization and cleanup
-- ✅ Multiple agent registration
-- ✅ Event-driven agent pattern
-- ✅ Production deployment strategies
+✅ **Supervisors provide process isolation** - One agent crash doesn't affect others  
+✅ **Production requirement** - Use supervisors for any production AI agent  
+✅ **Simple to use** - `create_supervisor_from_directory()` handles everything  
+✅ **Auto-recovery** - Crashed agents restart automatically  
+✅ **Resource cleanup** - Graceful shutdown of MCP tools and connections  
 
-**Key Takeaways:**
-- Initialize agent INSIDE callback (lazy initialization)
-- Reuse agent instance for all messages
-- Always cleanup resources in finally block
-- Use SubscriptionConfig for retries and scaling
-- Monitor with OmniDaemon CLI tools
+**The supervisor pattern is what makes OmniDaemon production-ready.** It transforms your AI agents from fragile single-process scripts into robust, fault-tolerant services.
 
-**Next Steps:**
-- Try with your own MCP tools
-- Add more agents for different topics
-- Scale with multiple runners
-- Deploy to production!
+---
 
-OmniCore Agent + OmniDaemon = Powerful event-driven AI! 🚀
+**Next:** Try the [Google ADK example](google-adk-agent.mdx) to see supervisors with a different AI framework.

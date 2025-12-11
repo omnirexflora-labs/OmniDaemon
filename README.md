@@ -184,14 +184,13 @@ Each example shows real-world patterns you'll use in production.
 - [System Overview](docs/architecture/system-overview.mdx) - How everything fits together
 
 ### How-To Guides
-- [Common Patterns](docs/how-to-guides/common-patterns.md) - Production recipes
-- [Monitoring & Metrics](docs/how-to-guides/monitoring.md) - Observability
+- [Common Patterns](docs/how-to-guides/common-patterns.mdx) - Production recipes
+- [Monitoring & Metrics](docs/how-to-guides/monitoring.mdx) - Observability
 - [Multi-Agent Systems](docs/how-to-guides/) - Coordination patterns
 
 ### API Reference
-- [Python SDK](docs/api-reference/sdk-api.md) - Complete SDK docs
-- [CLI Reference](docs/api-reference/cli.md) - Command-line tools
-- [REST API](docs/api-reference/http-api.md) - HTTP endpoints
+- [Python SDK](docs/api-reference/sdk-api.mdx) - Complete SDK docs
+- [CLI Reference](docs/api-reference/cli-reference.mdx) - Command-line tools
 
 ---
 
@@ -245,7 +244,7 @@ STORAGE_BACKEND=mongodb + MONGODB_URI=mongodb://...                 # Coming soo
 - 📖 [**Full Documentation**](https://docs-omnidaemon.omnirexfloralabs.com/docs) - Complete guides and API reference
 - 💡 [**Examples**](examples/) - Production-ready code samples
 - 🏗️ [**Architecture**](docs/architecture/) - Deep dive into system design
-- 🤝 [**Community**](docs/community/support.md) - Get help and contribute
+- 🤝 [**Community**](docs/community/support.mdx) - Get help and contribute
 - 🐛 [**Issues**](https://github.com/omnirexflora-labs/OmniDaemon/issues) - Report bugs or request features
 
 ---
