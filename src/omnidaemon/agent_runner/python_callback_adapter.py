@@ -1,15 +1,4 @@
 """
-Generic Python Callback Adapter
-
-This adapter allows any existing Python callback function to run in a separate process
-without modifying the original agent code. It communicates via stdio using JSON.
-
-Usage:
-    python -m omnidaemon.agent_runner.python_callback_adapter \
-        --module examples.omnicoreagent_dir.agent_runner \
-        --function call_file_system_agent
-"""
-"""
 Python Callback Adapter for OmniDaemon Agent Supervisor.
 
 This module provides a stdio-based adapter that allows Python functions to be
@@ -22,6 +11,11 @@ run as OmniDaemon agents managed by the AgentSupervisor. The adapter handles:
 
 The adapter follows a request-response protocol over stdio, where each message
 contains an 'id' for correlation, a 'type' (task, ping, shutdown), and a 'payload'.
+
+Usage:
+    python -m omnidaemon.agent_runner.python_callback_adapter \\
+        --module examples.omnicoreagent_dir.agent_runner \\
+        --function call_file_system_agent
 """
 
 import asyncio
@@ -31,7 +25,7 @@ import os
 import sys
 import time
 import importlib
-from typing import Callable, Dict, Any, Awaitable, Union, Optional
+from typing import Callable, Dict, Any, Optional
 
 logging.basicConfig(
     level=logging.INFO,

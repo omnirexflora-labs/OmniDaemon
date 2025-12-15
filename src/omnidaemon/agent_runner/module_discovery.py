@@ -9,7 +9,7 @@ discovering callback functions for OmniDaemon agents. It handles:
 - Agent directory dependency path setup
 """
 
-from typing import Literal, Tuple, Optional, Callable
+from typing import Literal, Tuple, Optional
 from pathlib import Path
 import importlib.util
 import os
