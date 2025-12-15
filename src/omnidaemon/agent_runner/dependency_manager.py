@@ -1,3 +1,16 @@
+"""
+Dependency Manager for Python Agent Isolation.
+
+This module handles Python dependency installation for OmniDaemon agents,
+ensuring each agent has its own isolated dependency environment.
+
+Key features:
+- Per-agent dependency isolation using `.omnidaemon_pydeps/` directory
+- Support for both requirements.txt and pyproject.toml
+- Dependency caching with hash-based validation
+- Automatic PYTHONPATH configuration
+"""
+
 from typing import Dict, Optional
 from pathlib import Path
 import os

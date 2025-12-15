@@ -9,6 +9,20 @@ Usage:
         --module examples.omnicoreagent_dir.agent_runner \
         --function call_file_system_agent
 """
+"""
+Python Callback Adapter for OmniDaemon Agent Supervisor.
+
+This module provides a stdio-based adapter that allows Python functions to be
+run as OmniDaemon agents managed by the AgentSupervisor. The adapter handles:
+- JSON message parsing from stdin
+- Task execution via user-provided callback
+- Health monitoring and heartbeat responses
+- Process metrics collection (CPU, memory)
+- Graceful shutdown handling
+
+The adapter follows a request-response protocol over stdio, where each message
+contains an 'id' for correlation, a 'type' (task, ping, shutdown), and a 'payload'.
+"""
 
 import asyncio
 import json
@@ -17,14 +31,14 @@ import os
 import sys
 import time
 import importlib
-from typing import Any, Callable, Dict, Optional
+from typing import Callable, Dict, Any, Awaitable, Union, Optional
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     stream=sys.stderr,
 )
-logger = logging.getLogger("PythonCallbackAdapter")
+logger = logging.getLogger(__name__)
 
 
 class PythonCallbackAdapter:
@@ -67,8 +81,8 @@ class PythonCallbackAdapter:
                 raise ValueError(
                     f"'{self.function_name}' in module '{self.module_path}' is not callable"
                 )
-            logger.info(
-                f"Loaded callback '{self.function_name}' from module '{self.module_path}'"
+            logger.debug(
+                f"Agent listening on stdin for messages (callback: {self.callback.__name__})"
             )
         except ImportError as e:
             raise RuntimeError(

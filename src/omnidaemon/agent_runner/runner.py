@@ -104,9 +104,6 @@ class BaseAgentRunner:
         logger.info(
             f"[Runner {self.runner_id}] Registered agent '{agent_name}' on topic '{topic}'"
         )
-        print(
-            f"[Runner {self.runner_id}] Registered agent '{agent_name}' on topic '{topic}'"
-        )
 
     async def _make_agent_callback(
         self,
@@ -269,7 +266,7 @@ class BaseAgentRunner:
                 await self.store.save_result(
                     task_id=task_id, result=response_payload, ttl_seconds=86400
                 )
-                logger.info(f"Result saved to store for task {task_id}")
+                logger.debug(f"Result saved to store for task {task_id}")
             except Exception as e:
                 logger.error(f"Failed to save result for {task_id}: {e}")
 
@@ -285,7 +282,7 @@ class BaseAgentRunner:
                             json={"payload": response_payload},
                             timeout=aiohttp.ClientTimeout(total=10),
                         ) as resp:
-                            logger.info(
+                            logger.debug(
                                 f"Webhook sent to {webhook_url} [status={resp.status}]"
                             )
                             break
@@ -302,7 +299,7 @@ class BaseAgentRunner:
                             f"Webhook failed permanently for task {task_id} after {MAX_RETRIES} attempts"
                         )
 
-            logger.info(f"Task {task_id} completed. Webhook delivery finalized.")
+            logger.debug(f"Task {task_id} completed. Webhook delivery finalized.")
         if reply_to:
             new_task_id = await self.publish_response(message, result)
             logger.info(f"Response published with task_id: {new_task_id}")
@@ -348,7 +345,7 @@ class BaseAgentRunner:
                     json={"payload": error_payload},
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as resp:
-                    logger.info(
+                    logger.debug(
                         f"Error webhook sent to {webhook_url} [status={resp.status}] "
                         f"for task {task_id}"
                     )

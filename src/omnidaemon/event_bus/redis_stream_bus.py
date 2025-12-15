@@ -245,7 +245,7 @@ class RedisStreamEventBus:
 
         semaphore_limit = consumer_count * 10
         self._group_semaphores[group] = asyncio.Semaphore(semaphore_limit)
-        logger.info(
+        logger.debug(
             f"[RedisStreamBus] Semaphore for {group} set to {semaphore_limit} "
             f"(consumer_count={consumer_count} * 10)"
         )
@@ -495,7 +495,7 @@ class RedisStreamEventBus:
             - Tracks retry counts in Redis hash
             - Automatically handles connection failures
         """
-        logger.info(f"[RedisStreamBus] reclaim loop start topic={topic} group={group}")
+        logger.debug(f"[RedisStreamBus] reclaim loop start topic={topic} group={group}")
         if not self._redis:
             await self.connect()
         assert self._redis is not None
@@ -553,7 +553,7 @@ class RedisStreamEventBus:
                                 f"[RedisStreamBus] Skipping reclaim of {msg_id}: still in-flight"
                             )
                             continue
-                        logger.info(
+                        logger.debug(
                             f"consumer group {group} reclaiming message id {msg_id} meant for topic {topic}"
                         )
 
@@ -568,7 +568,7 @@ class RedisStreamEventBus:
                         if not claimed:
                             continue
 
-                        logger.info(
+                        logger.debug(
                             f"[RedisStreamBus] reclaimed {msg_id} (idle={idle}ms) for group {group}"
                         )
                         await self._emit_monitor(
@@ -623,7 +623,7 @@ class RedisStreamEventBus:
                                 )
                             else:
                                 try:
-                                    logger.info(
+                                    logger.debug(
                                         f"[RedisStreamBus] Retry #{retry_count} for {_id} in group {group}"
                                     )
                                     payload["delivery_attempts"] += retry_count

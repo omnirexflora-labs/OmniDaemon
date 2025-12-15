@@ -146,7 +146,7 @@ class AgentSupervisor:
         if self.config.env:
             env.update(self.config.env)
 
-        logger.info(
+        logger.debug(
             "[%s] Launching agent: %s %s",
             self.config.name,
             self.config.command,
@@ -249,6 +249,7 @@ class AgentSupervisor:
         await self._transition_to(AgentState.STOPPED)
 
     async def _cleanup_tasks(self) -> None:
+        """Cancel and cleanup all async tasks (stdout, stderr, heartbeat)."""
         if self._stdout_task:
             self._stdout_task.cancel()
             try:
@@ -409,6 +410,7 @@ class AgentSupervisor:
         return "INFO"
 
     async def _wait_for_exit(self) -> None:
+        """Wait for agent process to exit and trigger restart if needed."""
         assert self._process
         await self._process.wait()
         logger.warning(
@@ -421,6 +423,7 @@ class AgentSupervisor:
             await self._restart_if_needed()
 
     async def _restart_if_needed(self) -> None:
+        """Attempt to restart the agent process with exponential backoff."""
         if self._stopping:
             return
 
@@ -469,13 +472,13 @@ class AgentSupervisor:
 
     async def _run_heartbeat_loop(self) -> None:
         """Periodic heartbeat loop to check agent health."""
-        logger.info(
+        logger.debug(
             "[%s] Heartbeat loop starting, waiting 5s for agent initialization",
             self.config.name,
         )
         await asyncio.sleep(5.0)
 
-        logger.info(
+        logger.debug(
             "[%s] Heartbeat loop active, interval=%ds",
             self.config.name,
             self.config.heartbeat_interval_seconds,
@@ -563,7 +566,7 @@ class AgentSupervisor:
 
                         await self._save_supervisor_state()
 
-                        logger.info(
+                        logger.debug(
                             "[%s] Heartbeat successful (latency: %.1fms, cpu: %.1f%%, mem: %.1fMB, requests: %d)",
                             self.config.name,
                             latency_ms,
@@ -613,6 +616,7 @@ class AgentSupervisor:
         logger.info("[%s] Heartbeat loop stopped", self.config.name)
 
     def _reject_all_pending(self, exc: Exception) -> None:
+        """Reject all pending request futures with the given exception."""
         for future in self._pending.values():
             if not future.done():
                 future.set_exception(exc)

@@ -1,6 +1,17 @@
-from typing import Literal, Tuple, Optional
+"""
+Module Discovery and Dynamic Import for OmniDaemon Agents.
+
+This module provides utilities for dynamically importing Python modules and
+discovering callback functions for OmniDaemon agents. It handles:
+- sys.path manipulation for agent code discovery
+- Dynamic module imports from file paths
+- Callback function discovery and validation
+- Agent directory dependency path setup
+"""
+
+from typing import Literal, Tuple, Optional, Callable
 from pathlib import Path
-import importlib
+import importlib.util
 import os
 import sys
 import logging
